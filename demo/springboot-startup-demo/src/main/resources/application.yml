@@ -1,0 +1,41 @@
+# SpringBoot启动流程演示项目配置文件
+# 此配置文件会在Environment准备阶段被加载
+
+server:
+  port: 8080
+  servlet:
+    context-path: /demo
+
+# 应用基本信息
+spring:
+  application:
+    name: springboot-startup-demo
+  # 环境配置 - 默认激活开发环境
+  # 可以通过命令行参数 --spring.profiles.active=test/prod 来覆盖
+  profiles:
+    active: dev
+  # 禁用默认Banner，使用自定义日志输出更清晰地展示启动流程
+  main:
+    banner-mode: off
+
+# 自定义配置属性，用于演示配置加载和自动装配
+# 此属性控制我们的DemoAutoConfiguration是否生效
+# @ConditionalOnProperty会检查这个值
+
+demo:
+  autoconfig:
+    enabled: true
+  # 自定义属性，用于演示Environment中的配置
+  startup:
+    show-details: true
+    description: "SpringBoot启动流程演示项目"
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    org.springframework: INFO
+    # 设置为DEBUG级别可以看到更详细的启动过程信息
+    org.springframework.boot: DEBUG
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

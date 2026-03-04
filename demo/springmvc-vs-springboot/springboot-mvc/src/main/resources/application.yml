@@ -1,0 +1,32 @@
+server:
+  port: 8081  # 直接配置端口号，不需要修改Tomcat配置文件
+  servlet:
+    context-path: /springboot  # 直接配置上下文路径
+
+spring:
+  application:
+    name: springboot-mvc-demo
+  
+  # Thymeleaf模板引擎配置（自动配置，这里只是展示可以自定义）
+  thymeleaf:
+    cache: false  # 开发时关闭缓存
+    suffix: .html
+    prefix: classpath:/templates/
+  
+  # MVC配置（SpringBoot自动配置了大部分，这里展示如何自定义）
+  mvc:
+    # 日期格式配置
+    format:
+      date: yyyy-MM-dd
+    # 静态资源路径（SpringBoot默认自动映射/static, /public, /resources, /META-INF/resources）
+    static-path-pattern: /static/**
+
+# 自定义配置项
+custom:
+  message: "SpringBoot自动配置真方便！"
+  features:
+    - "自动配置DispatcherServlet"
+    - "内置Tomcat服务器"
+    - "自动JSON转换"
+    - "自动静态资源映射"
+    - "配置文件即配置，无需XML"

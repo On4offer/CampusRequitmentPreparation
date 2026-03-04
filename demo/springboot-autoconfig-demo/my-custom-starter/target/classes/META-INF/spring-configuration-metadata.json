@@ -1,0 +1,30 @@
+{
+  "groups": [
+    {
+      "name": "my-custom",
+      "type": "com.example.mycustom.MyCustomProperties",
+      "sourceType": "com.example.mycustom.MyCustomProperties"
+    }
+  ],
+  "properties": [
+    {
+      "name": "my-custom.enabled",
+      "type": "java.lang.Boolean",
+      "description": "是否启用自定义功能",
+      "sourceType": "com.example.mycustom.MyCustomProperties"
+    },
+    {
+      "name": "my-custom.message",
+      "type": "java.lang.String",
+      "description": "自定义消息",
+      "sourceType": "com.example.mycustom.MyCustomProperties"
+    },
+    {
+      "name": "my-custom.timeout",
+      "type": "java.lang.Integer",
+      "description": "超时时间（毫秒）",
+      "sourceType": "com.example.mycustom.MyCustomProperties"
+    }
+  ],
+  "hints": []
+}

@@ -1,0 +1,8 @@
+# 自定义ApplicationContextInitializer，用于演示启动流程
+org.springframework.context.ApplicationContextInitializer=com.example.demo.initializer.AppTypeDebugInitializer,com.example.demo.initializer.DemoApplicationContextInitializer
+
+# 自定义ApplicationListener通过spring.factories注册，以便能监听到早期事件
+org.springframework.context.ApplicationListener=com.example.demo.listener.DemoApplicationListener
+
+# 自定义自动配置类，用于演示自动装配机制
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=com.example.demo.autoconfigure.DemoAutoConfiguration

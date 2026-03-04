@@ -1,0 +1,20 @@
+# SpringBoot应用配置
+spring:
+  application:
+    name: springboot-autoconfig-demo
+  
+# 自定义Starter配置
+my-custom:
+  enabled: true
+  message: "Hello from Custom Starter!"
+  timeout: 5000
+
+# 服务器配置
+server:
+  port: 8080
+
+# 日志配置
+logging:
+  level:
+    org.springframework.boot.autoconfigure: DEBUG  # 开启自动装配的DEBUG日志，便于观察自动装配过程
+

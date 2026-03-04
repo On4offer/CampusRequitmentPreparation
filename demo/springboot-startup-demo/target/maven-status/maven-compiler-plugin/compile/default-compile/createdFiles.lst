@@ -1,0 +1,10 @@
+com\example\demo\controller\DemoController.class
+com\example\demo\runner\DemoCommandLineRunner.class
+com\example\demo\runner\DemoApplicationRunner.class
+com\example\demo\initializer\DemoApplicationContextInitializer.class
+com\example\demo\listener\DemoApplicationListener.class
+com\example\demo\processor\DemoBeanFactoryPostProcessor.class
+com\example\demo\processor\DemoBeanPostProcessor.class
+com\example\demo\autoconfigure\DemoAutoConfiguration$DemoService.class
+com\example\demo\autoconfigure\DemoAutoConfiguration.class
+com\example\demo\SpringBootStartupDemoApplication.class

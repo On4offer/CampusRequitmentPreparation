@@ -1,0 +1,38 @@
+# SpringBoot启动流程演示项目 - 测试环境配置
+# 此配置文件会在激活test环境时被加载
+
+# 测试环境使用8082端口
+server:
+  port: 8082
+  servlet:
+    context-path: /demo-test
+
+# 应用基本信息
+spring:
+  application:
+    name: springboot-startup-demo-test
+  # 测试环境配置
+  config:
+    activate:
+      on-profile: test
+
+# 自定义配置属性
+# 测试环境的配置
+
+demo:
+  autoconfig:
+    enabled: true
+  startup:
+    show-details: true
+    description: "SpringBoot启动流程演示项目 - 测试环境"
+    test-specific-property: "这是测试环境特有的属性"
+
+# 测试环境日志配置 - 级别设置为INFO，便于查看运行状态
+logging:
+  level:
+    root: INFO
+    org.springframework: INFO
+    org.springframework.boot: INFO
+    com.example.demo: DEBUG
+  pattern:
+    console: "[TEST] %d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

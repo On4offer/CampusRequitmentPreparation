@@ -1,0 +1,38 @@
+# SpringBoot启动流程演示项目 - 生产环境配置
+# 此配置文件会在激活prod环境时被加载
+
+# 生产环境使用标准8080端口
+server:
+  port: 8080
+  servlet:
+    context-path: /demo
+
+# 应用基本信息
+spring:
+  application:
+    name: springboot-startup-demo-prod
+  # 生产环境配置
+  config:
+    activate:
+      on-profile: prod
+
+# 自定义配置属性
+# 生产环境的配置
+
+demo:
+  autoconfig:
+    enabled: true
+  startup:
+    show-details: false  # 生产环境不显示详细信息
+    description: "SpringBoot启动流程演示项目 - 生产环境"
+    prod-specific-property: "这是生产环境特有的属性"
+
+# 生产环境日志配置 - 级别设置为WARN，减少日志输出提高性能
+logging:
+  level:
+    root: WARN
+    org.springframework: WARN
+    org.springframework.boot: INFO
+    com.example.demo: WARN
+  pattern:
+    console: "[PROD] %d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

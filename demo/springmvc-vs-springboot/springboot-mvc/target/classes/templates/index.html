@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>SpringBoot MVC示例</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: #f0f8ff;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2196F3;
+            border-bottom: 2px solid #2196F3;
+            padding-bottom: 10px;
+        }
+        .highlight {
+            background-color: #e8f5e9;
+            padding: 15px;
+            border-left: 4px solid #4CAF50;
+            margin: 20px 0;
+        }
+        code {
+            background-color: #f1f1f1;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+        }
+        .feature-list {
+            background-color: #fff3e0;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .feature-list li {
+            margin: 8px 0;
+            color: #e65100;
+        }
+    </style>
+    <script th:src="@{/static/demo.js}"></script>
+</head>
+<body onload="demoFunction()">
+<div class="container">
+    <h1>SpringBoot MVC项目演示</h1>
+    
+    <div class="highlight">
+        <h3>配置说明：</h3>
+        <p>✅ 无需配置 <code>web.xml</code> 和 <code>spring-mvc.xml</code></p>
+        <p>✅ SpringBoot自动配置了：</p>
+        <div class="feature-list">
+            <ul>
+                <li>DispatcherServlet（自动注册）</li>
+                <li>组件扫描（@SpringBootApplication自动处理）</li>
+                <li>Thymeleaf视图解析器（自动配置）</li>
+                <li>静态资源处理（自动映射/static等目录）</li>
+                <li>Jackson消息转换器（自动配置）</li>
+                <li>内嵌Tomcat服务器（无需外部容器）</li>
+            </ul>
+        </div>
+    </div>
+    
+    <p><strong>消息：</strong> <span th:text="${message}">消息内容</span></p>
+    <p><strong>框架：</strong> <span th:text="${framework}">框架版本</span></p>
+    <p><strong>自定义消息：</strong> <span th:text="${customMessage}">自定义配置消息</span></p>
+    
+    <h3>访问链接：</h3>
+    <ul>
+        <li><a th:href="@{/springboot/api/data}">查看JSON数据接口</a></li>
+        <li><a th:href="@{/springboot/health}">健康检查接口</a></li>
+        <li><a th:href="@{/api/v1/users}">RESTful API用户列表</a></li>
+    </ul>
+    
+    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+        <p style="color: #666; font-style: italic;">SpringBoot自动配置就是这么简单！一行依赖，零XML配置，即可快速开发Web应用。</p>
+    </div>
+</div>
+</body>
+</html>

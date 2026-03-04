@@ -1,0 +1,2 @@
+# Spring Boot AutoConfiguration
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=com.example.mycustom.MyCustomAutoConfiguration

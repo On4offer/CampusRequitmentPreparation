@@ -1,0 +1,38 @@
+# SpringBoot启动流程演示项目 - 开发环境配置
+# 此配置文件会在激活dev环境时被加载
+
+# 开发环境使用8081端口，区别于默认端口
+server:
+  port: 8081
+  servlet:
+    context-path: /demo-dev
+
+# 应用基本信息
+spring:
+  application:
+    name: springboot-startup-demo-dev
+  # 开发环境配置
+  config:
+    activate:
+      on-profile: dev
+
+# 自定义配置属性
+# 开发环境的配置
+
+demo:
+  autoconfig:
+    enabled: true
+  startup:
+    show-details: true
+    description: "SpringBoot启动流程演示项目 - 开发环境"
+    dev-specific-property: "这是开发环境特有的属性"
+
+# 开发环境日志配置 - 级别设置为DEBUG，以便查看更多调试信息
+logging:
+  level:
+    root: INFO
+    org.springframework: DEBUG
+    org.springframework.boot: DEBUG
+    com.example.demo: TRACE
+  pattern:
+    console: "[DEV] %d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
