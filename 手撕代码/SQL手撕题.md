@@ -4,9 +4,38 @@
 
 ---
 
-## 一、建表与数据（经典四表）
+## 一、所需建表语句（全部汇总）
+
+> 以下为可重复执行的 MySQL 脚本，练习前复制到客户端执行即可。也可直接运行同目录下的 `init_tables.sql`。
 
 ```sql
+-- ----------------------------------------
+-- SQL 手撕题 建表脚本 (MySQL 5.7+)
+-- 可重复执行：先 DROP 再 CREATE
+-- ----------------------------------------
+
+DROP TABLE IF EXISTS t_pivot;
+DROP TABLE IF EXISTS t_median;
+DROP TABLE IF EXISTS stats;
+DROP TABLE IF EXISTS sales;
+DROP TABLE IF EXISTS Logs;
+DROP TABLE IF EXISTS login;
+DROP TABLE IF EXISTS Department;
+DROP TABLE IF EXISTS Employee;
+DROP TABLE IF EXISTS score;
+DROP TABLE IF EXISTS teacher;
+DROP TABLE IF EXISTS course;
+DROP TABLE IF EXISTS student;
+DROP TABLE IF EXISTS products;
+
+-- 商品表（基础题）
+CREATE TABLE products (
+    id       INT PRIMARY KEY,
+    `name`   VARCHAR(50),
+    price    DECIMAL(10,2),
+    category VARCHAR(20)
+);
+
 -- 学生表
 CREATE TABLE student (
     s_id    VARCHAR(10) PRIMARY KEY,
@@ -35,11 +64,196 @@ CREATE TABLE score (
     s_score DECIMAL(5,2),
     PRIMARY KEY (s_id, c_id)
 );
+
+-- 部门表
+CREATE TABLE Department (
+    id   INT PRIMARY KEY,
+    `name` VARCHAR(50)
+);
+
+-- 员工表（LeetCode 176/184）
+CREATE TABLE Employee (
+    id           INT PRIMARY KEY,
+    `name`       VARCHAR(50),
+    salary       DECIMAL(10,2),
+    departmentId INT
+);
+
+-- 登录表（连续登录、次日留存）
+CREATE TABLE login (
+    user_id    VARCHAR(20),
+    login_date DATE,
+    PRIMARY KEY (user_id, login_date)
+);
+
+-- 连续数字表（LeetCode 180）
+CREATE TABLE Logs (
+    id  INT PRIMARY KEY AUTO_INCREMENT,
+    num INT
+);
+
+-- 数值表（中位数题）
+CREATE TABLE t_median (
+    id  INT PRIMARY KEY,
+    val DECIMAL(10,2)
+);
+
+-- 销售表（累计求和）
+CREATE TABLE sales (
+    `year_month` DATE,
+    gmv          DECIMAL(15,2)
+);
+
+-- 统计表（同环比）
+CREATE TABLE stats (
+    dt     DATE,
+    amount DECIMAL(15,2)
+);
+
+-- 行转列结果表（列转行题，可由六(1)结果或手动插入）
+CREATE TABLE t_pivot (
+    s_id VARCHAR(10),
+    `语文` DECIMAL(5,2),
+    `数学` DECIMAL(5,2),
+    `英语` DECIMAL(5,2)
+);
+```
+
+> **说明**：`t_median` 用于中位数题，`t_pivot` 用于列转行题；中文列名已用反引号包裹，保证 MySQL 可正确解析。
+
+---
+
+## 二、基础题（覆盖简单考点）
+
+> 面试可能从基础题开始，务必熟练。
+
+### 1. 简单查询：SELECT、WHERE、ORDER BY、LIMIT
+
+```sql
+-- 查询所有学生
+SELECT * FROM student;
+
+-- 查询男生
+SELECT * FROM student WHERE s_sex = '男';
+
+-- 按姓名排序，取前 5 条
+SELECT * FROM student ORDER BY s_name LIMIT 5;
+
+-- 分页：第 2 页，每页 10 条（OFFSET 10, LIMIT 10）
+SELECT * FROM student ORDER BY s_id LIMIT 10 OFFSET 10;
+```
+
+### 2. 去重 DISTINCT
+
+```sql
+-- 查询有选课的学生学号（去重）
+SELECT DISTINCT s_id FROM score;
+
+-- 查询选了几门不同课程
+SELECT s_id, COUNT(DISTINCT c_id) AS cnt FROM score GROUP BY s_id;
+```
+
+### 3. 简单聚合（无分组）
+
+```sql
+-- 学生总数
+SELECT COUNT(*) FROM student;
+
+-- 成绩表总记录数、平均分、最高分
+SELECT COUNT(*) AS cnt, AVG(s_score) AS avg_score, MAX(s_score) AS max_score
+FROM score;
+```
+
+### 4. 条件：IN、BETWEEN、LIKE
+
+```sql
+-- 学号在指定列表中
+SELECT * FROM student WHERE s_id IN ('01', '02', '03');
+
+-- 成绩在 60～90 之间
+SELECT * FROM score WHERE s_score BETWEEN 60 AND 90;
+
+-- 姓名包含「张」
+SELECT * FROM student WHERE s_name LIKE '%张%';
+
+-- 姓「李」（一个字符用 _）
+SELECT * FROM student WHERE s_name LIKE '李%';
+```
+
+### 5. NULL 处理
+
+```sql
+-- 成绩不为空
+SELECT * FROM score WHERE s_score IS NOT NULL;
+
+-- 成绩为空时显示 0
+SELECT s_id, c_id, IFNULL(s_score, 0) AS score FROM score;
+
+-- 统计非空成绩数量
+SELECT COUNT(s_score) FROM score;  -- 不统计 NULL
+```
+
+### 6. 简单单表 JOIN
+
+```sql
+-- 查询学生姓名及成绩（两表关联）
+SELECT st.s_name, sc.c_id, sc.s_score
+FROM student st
+JOIN score sc ON st.s_id = sc.s_id;
+```
+
+### 7. CASE WHEN 简单分支
+
+```sql
+-- 成绩等级：>=90 优，>=60 及格，否则不及格
+SELECT s_id, c_id, s_score,
+       CASE WHEN s_score >= 90 THEN '优'
+            WHEN s_score >= 60 THEN '及格'
+            ELSE '不及格' END AS level
+FROM score;
+```
+
+### 8. 商品表基础题（products）
+
+```sql
+-- 价格在 100～500 的商品
+SELECT * FROM products WHERE price BETWEEN 100 AND 500;
+
+-- 分类为「电子产品」的商品，按价格降序
+SELECT * FROM products WHERE category = '电子产品' ORDER BY price DESC;
+
+-- 商品名以「手机」开头
+SELECT * FROM products WHERE name LIKE '手机%';
+
+-- 每个分类的商品数量
+SELECT category, COUNT(*) AS cnt FROM products GROUP BY category;
+```
+
+### 9. 日期条件
+
+```sql
+-- 本月出生的学生
+SELECT * FROM student
+WHERE DATE_FORMAT(s_birth, '%Y-%m') = DATE_FORMAT(CURDATE(), '%Y-%m');
+
+-- 最近 7 天登录的用户（login 表）
+SELECT DISTINCT user_id FROM login
+WHERE login_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY);
+```
+
+### 10. 简单子查询
+
+```sql
+-- 查询高于平均成绩的记录
+SELECT * FROM score WHERE s_score > (SELECT AVG(s_score) FROM score);
+
+-- 查询成绩最高的学生学号
+SELECT s_id FROM score WHERE s_score = (SELECT MAX(s_score) FROM score);
 ```
 
 ---
 
-## 二、排名与 TopN
+## 三、排名与 TopN（进阶）
 
 ### 1. 第二高的薪水（LeetCode 176）
 
@@ -101,7 +315,7 @@ WHERE t.rk <= 2;
 
 ---
 
-## 三、聚合与分组
+## 四、聚合与分组
 
 ### 1. 平均成绩大于 60 的学生及平均成绩
 
@@ -136,7 +350,7 @@ GROUP BY c_id;
 
 ---
 
-## 四、多表关联
+## 五、多表关联
 
 ### 1. 查询选了「张三」老师课程的学生
 
@@ -173,7 +387,7 @@ HAVING COUNT(c_id) >= 2;
 
 ---
 
-## 五、行转列 / 列转行
+## 六、行转列 / 列转行
 
 ### 1. 行转列：每个学生每门课成绩一列
 
@@ -190,17 +404,17 @@ GROUP BY s_id;
 ### 2. 列转行（UNION ALL）
 
 ```sql
--- 若表为 (s_id, 语文, 数学, 英语)，转为 (s_id, subject, score)
-SELECT s_id, '语文' AS subject, 语文 AS score FROM t WHERE 语文 IS NOT NULL
+-- 表 t_pivot(s_id, 语文, 数学, 英语)，转为 (s_id, subject, score)
+SELECT s_id, '语文' AS subject, 语文 AS score FROM t_pivot WHERE 语文 IS NOT NULL
 UNION ALL
-SELECT s_id, '数学', 数学 FROM t WHERE 数学 IS NOT NULL
+SELECT s_id, '数学', 数学 FROM t_pivot WHERE 数学 IS NOT NULL
 UNION ALL
-SELECT s_id, '英语', 英语 FROM t WHERE 英语 IS NOT NULL;
+SELECT s_id, '英语', 英语 FROM t_pivot WHERE 英语 IS NOT NULL;
 ```
 
 ---
 
-## 六、连续类问题
+## 七、连续类问题
 
 ### 1. 连续登录 N 天的用户（如 3 天）
 
@@ -228,24 +442,23 @@ JOIN Logs c ON b.id = c.id - 1 AND b.num = c.num;
 
 ---
 
-## 七、留存 / 次日留存
+## 八、留存 / 次日留存
 
 ```sql
--- 表: user_id, date（每天一条）
--- 次日留存：今天活跃且明天也活跃
+-- 表 login(user_id, login_date)，次日留存：今天活跃且明天也活跃
 SELECT
-    a.date,
+    a.login_date,
     COUNT(DISTINCT a.user_id) AS dau,
     COUNT(DISTINCT b.user_id) AS next_day_users,
     ROUND(COUNT(DISTINCT b.user_id) / COUNT(DISTINCT a.user_id), 2) AS retention
 FROM login a
-LEFT JOIN login b ON a.user_id = b.user_id AND b.date = DATE_ADD(a.date, INTERVAL 1 DAY)
-GROUP BY a.date;
+LEFT JOIN login b ON a.user_id = b.user_id AND b.login_date = DATE_ADD(a.login_date, INTERVAL 1 DAY)
+GROUP BY a.login_date;
 ```
 
 ---
 
-## 八、子查询与 EXISTS
+## 九、子查询与 EXISTS
 
 ### 1. 查询没有成绩的学生
 
@@ -269,7 +482,7 @@ WHERE sc.s_score > (
 
 ---
 
-## 九、日期与区间
+## 十、日期与区间
 
 ### 1. 本月、本周、今日
 
@@ -287,7 +500,7 @@ WHERE date_col >= DATE_SUB(CURDATE(), INTERVAL 7 DAY);
 
 ---
 
-## 十、综合题示例
+## 十一、综合题示例
 
 ### 1. 各科成绩都大于该科平均分的学生
 
@@ -314,18 +527,18 @@ WHERE salary < (SELECT MAX(salary) FROM Employee);
 
 ---
 
-## 十一、中位数
+## 十二、中位数
 
 ### 1. 有序中位数（MySQL 无 MEDIAN，用排序+序号）
 
 ```sql
--- 表 t(id, val)，求 val 的中位数（奇数取中间，偶数取中间两个平均）
+-- 表 t_median(id, val)，求 val 的中位数（奇数取中间，偶数取中间两个平均）
 SELECT AVG(val) AS median
 FROM (
     SELECT val,
            ROW_NUMBER() OVER (ORDER BY val) AS rn,
            COUNT(*) OVER () AS cnt
-    FROM t
+    FROM t_median
 ) x
 WHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2));
 ```
@@ -333,37 +546,37 @@ WHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2));
 ### 2. 分组中位数（如每个部门工资中位数）
 
 ```sql
-SELECT department_id, AVG(salary) AS median_salary
+SELECT departmentId, AVG(salary) AS median_salary
 FROM (
-    SELECT department_id, salary,
-           ROW_NUMBER() OVER (PARTITION BY department_id ORDER BY salary) AS rn,
-           COUNT(*) OVER (PARTITION BY department_id) AS cnt
+    SELECT departmentId, salary,
+           ROW_NUMBER() OVER (PARTITION BY departmentId ORDER BY salary) AS rn,
+           COUNT(*) OVER (PARTITION BY departmentId) AS cnt
     FROM Employee
 ) t
 WHERE rn IN (FLOOR((cnt + 1) / 2), CEIL((cnt + 1) / 2))
-GROUP BY department_id;
+GROUP BY departmentId;
 ```
 
 ---
 
-## 十二、累计求和（如每月 GMV 累计）
+## 十三、累计求和（如每月 GMV 累计）
 
 ```sql
 -- 表 sales(year_month, gmv)，求每月 GMV 及当年累计 GMV
-SELECT year_month, gmv,
-       SUM(gmv) OVER (PARTITION BY YEAR(year_month) ORDER BY year_month
+SELECT `year_month`, gmv,
+       SUM(gmv) OVER (PARTITION BY YEAR(`year_month`) ORDER BY `year_month`
                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_gmv
 FROM sales;
 
 -- 或使用 RANGE（按月份累加）
-SELECT year_month, gmv,
-       SUM(gmv) OVER (ORDER BY year_month RANGE UNBOUNDED PRECEDING) AS cum_gmv
+SELECT `year_month`, gmv,
+       SUM(gmv) OVER (ORDER BY `year_month` RANGE UNBOUNDED PRECEDING) AS cum_gmv
 FROM sales;
 ```
 
 ---
 
-## 十三、同环比
+## 十四、同环比
 
 ### 1. 环比：与上一期比（如本月 vs 上月）
 
@@ -389,16 +602,18 @@ FROM (SELECT DATE_FORMAT(dt, '%Y-%m-01') AS dt, SUM(amount) AS amount FROM stats
 
 ---
 
-## 十四、常考函数速记
+## 十五、常考函数速记
 
-| 类别     | 函数/语法 |
-|----------|-----------|
-| 窗口     | ROW_NUMBER(), RANK(), DENSE_RANK(), LAG/LEAD |
-| 聚合     | COUNT, SUM, AVG, MAX, MIN；GROUP BY, HAVING |
-| 判空     | IFNULL(expr, val), COALESCE(a, b, ...) |
-| 条件     | CASE WHEN ... THEN ... ELSE ... END |
-| 去重     | DISTINCT；COUNT(DISTINCT col) |
-| 分页     | LIMIT n OFFSET m（或 LIMIT m, n） |
-| 日期     | DATE_FORMAT, DATE_ADD, DATEDIFF, CURDATE() |
+
+| 类别  | 函数/语法                                        |
+| --- | -------------------------------------------- |
+| 窗口  | ROW_NUMBER(), RANK(), DENSE_RANK(), LAG/LEAD |
+| 聚合  | COUNT, SUM, AVG, MAX, MIN；GROUP BY, HAVING   |
+| 判空  | IFNULL(expr, val), COALESCE(a, b, ...)       |
+| 条件  | CASE WHEN ... THEN ... ELSE ... END          |
+| 去重  | DISTINCT；COUNT(DISTINCT col)                 |
+| 分页  | LIMIT n OFFSET m（或 LIMIT m, n）               |
+| 日期  | DATE_FORMAT, DATE_ADD, DATEDIFF, CURDATE()   |
+
 
 **建议**：多表 JOIN、GROUP BY + HAVING、窗口排名、行转列、连续/留存至少各练一两道；冲数仓/数据分析岗可加练中位数、累计、同环比。

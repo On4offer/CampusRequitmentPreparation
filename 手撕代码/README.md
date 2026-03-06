@@ -11,7 +11,7 @@
 |------|------|
 | [Java手撕代码题.md](./Java手撕代码题.md) | 单例、LRU、生产者-消费者、交替/顺序打印、手写 ArrayList/HashMap、死锁、wait/notify、**手写线程池、限流器（令牌桶/滑动窗口）、带过期缓存、公平/非公平锁** 等 |
 | [Java手撕知识点.md](./Java手撕知识点.md) | 对应 Java 手撕题的**原理与考点**：volatile、DCL、Condition、LRU 原理、HashMap/ArrayList、死锁、线程池、限流算法、公平锁等 |
-| [SQL手撕题.md](./SQL手撕题.md) | 建表、排名/TopN、多表关联、行转列、连续登录、留存、**中位数、累计求和、同环比**、窗口函数、常考函数 |
+| [SQL手撕题.md](./SQL手撕题.md) | **基础题**（SELECT/WHERE/ORDER BY/LIMIT/DISTINCT/聚合/IN/LIKE/NULL/JOIN/CASE/子查询）、建表、排名/TopN、多表关联、行转列、连续登录、留存、中位数、累计求和、同环比 |
 | [SQL手撕知识点.md](./SQL手撕知识点.md) | 对应 SQL 手撕题的**原理与考点**：SQL 执行顺序、JOIN、窗口函数、GROUP BY/HAVING、子查询、连续/留存、同环比等 |
 
 ---
