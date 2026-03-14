@@ -14,7 +14,7 @@
 
 - **文件夹**：部分使用**下划线**（如 `singleton_demo`、`copy_demo`、`thread_order_demo`），与 Java 包名一致；部分使用**连字符**（如 `producer-consumer-blockingqueue-demo`），便于阅读。
 - **包名**：所有 demo 的 Java 包名均为**下划线**（如 `producer_consumer_blockingqueue_demo`），因包名不能含连字符。
-- **运行**：无论文件夹名如何，请进入对应目录后按该目录内 `README.md` 的 `javac` / `java` 命令执行（主类为 `包名.类名`）。
+- **运行**：无论文件夹名如何，请进入对应目录后按该目录内 `README.md` 的说明执行（多数为 `javac` / `java`，主类为 `包名.类名`；**JavaSE** 为 Maven 项目，包名 `com.learning.*`，使用 `mvn compile` / `mvn exec:java`）。
 
 ---
 
@@ -79,6 +79,7 @@
 
 | 文件夹 | 内容 |
 |--------|------|
+| [JavaSE](./JavaSE/) | **Java SE 系统学习**（Maven 项目）：基础语法、OOP、异常与 IO、泛型/反射/注解、多线程与并发、新特性、集合与框架示例；与上方按题型的手撕/口述 demo 互补 |
 | [dynamic-proxy-private-field-demo](./dynamic-proxy-private-field-demo/) | 动态代理与私有属性（AOP/事务相关） |
 | [spring-transaction-basic-demo](./spring-transaction-basic-demo/) | Spring 事务基础 |
 | [spring-transaction-propagation-demo](./spring-transaction-propagation-demo/) | 事务传播行为 |
@@ -92,7 +93,7 @@
 ## 使用建议
 
 1. **手撕重点**：单例 DCL、LRU（链表+HashMap）、生产者-消费者、交替打印建议能闭卷写；ArrayList/HashMap 能讲清扩容与流程。
-2. **每个 demo**：进入对应文件夹看 `README.md`，按其中的命令编译运行（一般为 `javac -d . *.java` 后 `java 包名.主类`）。
+2. **每个 demo**：进入对应文件夹看 `README.md`，按其中的命令编译运行（多数为 `javac -d . *.java` 后 `java 包名.主类`；**JavaSE** 为 Maven 项目，使用 `mvn compile` / `mvn exec:java`）。
 3. **与手撕文档对应**：题目与原理可配合仓库内 [手撕代码/Java手撕代码题.md](../手撕代码/Java手撕代码题.md) 与 [Java手撕知识点.md](../手撕代码/Java手撕知识点.md) 一起复习。
 4. **覆盖审阅**：校招手撕与口述、技术栈对应关系见 [DEMO覆盖审阅.md](./DEMO覆盖审阅.md)。
 

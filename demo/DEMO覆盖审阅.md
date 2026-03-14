@@ -74,6 +74,7 @@
 
 | 考点 | 对应 demo | 状态 |
 |------|-----------|------|
+| Java SE 系统学习（语法/OOP/异常与IO/泛型反射注解/并发/新特性/集合） | JavaSE（Maven 项目） | ✅ 已覆盖，与按题型手撕 demo 互补 |
 | Spring 事务基础/传播/失效 | spring-transaction-*-demo | ✅ 已覆盖 |
 | Spring Boot 启动、自动配置 | springboot-startup-demo、springboot-autoconfig-demo | ✅ 已覆盖 |
 | Spring MVC vs Boot | springmvc-vs-springboot | ✅ 已覆盖 |
@@ -102,5 +103,5 @@
 
 ## 文档与文件夹命名检查（简要）
 
-- **文档**：本审阅表与 [demo/README.md](./README.md) 已与当前所有 demo 对齐；[手撕代码/README.md](../手撕代码/README.md) 已增加对 demo 目录的引用。无需整体重写。
+- **文档**：本审阅表与 [demo/README.md](./README.md) 已与当前所有 demo 对齐（含 **JavaSE**）；[手撕代码/README.md](../手撕代码/README.md) 已增加对 demo 目录的引用。无需整体重写。
 - **文件夹命名**：当前存在两种风格——**下划线**（如 `singleton_demo`、`copy_demo`）与 **连字符**（如 `lru-cache-demo`、`simple-future-demo`）。Java 包名一律为下划线。为减少批量重命名带来的链接与脚本影响，**建议保持现状**，已在 demo/README.md 中增加「命名说明」；新増 demo 若希望与包名完全一致，可采用**下划线**文件夹名。
