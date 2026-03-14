@@ -10,10 +10,10 @@
         <module name="spring-transaction-invalidation-demo" />
         <module name="springboot-mvc" />
         <module name="dynamic-proxy-private-field-demo" />
-        <module name="my-custom-starter" />
         <module name="spring-transaction-propagation-demo" />
         <module name="springboot-startup-demo" />
         <module name="springboot-autoconfig-demo" />
+        <module name="java-basics-demo" />
         <module name="spring-transaction-basic-demo" />
         <module name="springmvc-traditional" />
       </profile>

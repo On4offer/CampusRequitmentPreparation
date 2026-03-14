@@ -14,79 +14,91 @@
 
 - **文件夹**：部分使用**下划线**（如 `singleton_demo`、`copy_demo`、`thread_order_demo`），与 Java 包名一致；部分使用**连字符**（如 `producer-consumer-blockingqueue-demo`），便于阅读。
 - **包名**：所有 demo 的 Java 包名均为**下划线**（如 `producer_consumer_blockingqueue_demo`），因包名不能含连字符。
-- **运行**：无论文件夹名如何，请进入对应目录后按该目录内 `README.md` 的说明执行（多数为 `javac` / `java`，主类为 `包名.类名`；**JavaSE** 为 Maven 项目，包名 `com.learning.*`，使用 `mvn compile` / `mvn exec:java`）。
+- **运行**：无论文件夹名如何，请进入对应目录后按该目录内 `README.md` 的说明执行（多数为 `javac` / `java`，主类为 `包名.类名`；**JavaSE** 为 Maven 项目，包名 `com.learning.`*，使用 `mvn compile` / `mvn exec:java`）。
 
 ---
 
 ## 一、手撕 / 并发与设计模式
 
-| 文件夹 | 内容 |
-|--------|------|
-| [singleton_demo](./singleton_demo/) | 单例 7 种实现（饿汉、懒汉、DCL、静态内部类、枚举等）+ 面试问答 |
-| [producer-consumer-blockingqueue-demo](./producer-consumer-blockingqueue-demo/) | 生产者-消费者（Lock + Condition 手写阻塞队列） |
-| [producer-consumer-wait-notify-demo](./producer-consumer-wait-notify-demo/) | 生产者-消费者（wait/notify） |
-| [alternate-print-demo](./alternate-print-demo/) | 两线程交替打印（如 1~100） |
-| [abc-order-print-demo](./abc-order-print-demo/) | 三线程顺序打印 ABC 循环 |
-| [thread_order_demo](./thread_order_demo/) | 多线程顺序执行（join、CountDownLatch、CyclicBarrier、Semaphore、wait/notify） |
-| [deadlock-demo](./deadlock-demo/) | 死锁示例与排查 |
-| [simple-thread-pool-demo](./simple-thread-pool-demo/) | 手写简单线程池 |
-| [rate-limiter-demo](./rate-limiter-demo/) | 限流：令牌桶、固定窗口 |
-| [expire-cache-demo](./expire-cache-demo/) | 带过期缓存（DelayQueue） |
-| [fair-lock-demo](./fair-lock-demo/) | 公平锁 vs 非公平锁 |
-| [callable-future-demo](./callable-future-demo/) | Callable + Future 取结果（手撕题其他高频） |
-| [simple-future-demo](./simple-future-demo/) | 手写简易 Future（阻塞队列存结果，大厂手撕版） |
-| [redis-distributed-lock-demo](./redis-distributed-lock-demo/) | Redis 分布式锁（本地模拟 + 口述/Lua 对照） |
+
+| 文件夹                                                                             | 内容                                                               |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| [singleton_demo](./singleton_demo/)                                             | 单例 7 种实现（饿汉、懒汉、DCL、静态内部类、枚举等）+ 面试问答                              |
+| [producer-consumer-blockingqueue-demo](./producer-consumer-blockingqueue-demo/) | 生产者-消费者（Lock + Condition 手写阻塞队列）                                 |
+| [producer-consumer-wait-notify-demo](./producer-consumer-wait-notify-demo/)     | 生产者-消费者（wait/notify）                                             |
+| [alternate-print-demo](./alternate-print-demo/)                                 | 两线程交替打印（如 1~100）                                                 |
+| [abc-order-print-demo](./abc-order-print-demo/)                                 | 三线程顺序打印 ABC 循环                                                   |
+| [thread_order_demo](./thread_order_demo/)                                       | 多线程顺序执行（join、CountDownLatch、CyclicBarrier、Semaphore、wait/notify） |
+| [deadlock-demo](./deadlock-demo/)                                               | 死锁示例与排查                                                          |
+| [simple-thread-pool-demo](./simple-thread-pool-demo/)                           | 手写简单线程池                                                          |
+| [rate-limiter-demo](./rate-limiter-demo/)                                       | 限流：令牌桶、固定窗口                                                      |
+| [expire-cache-demo](./expire-cache-demo/)                                       | 带过期缓存（DelayQueue）                                                |
+| [fair-lock-demo](./fair-lock-demo/)                                             | 公平锁 vs 非公平锁                                                      |
+| [callable-future-demo](./callable-future-demo/)                                 | Callable + Future 取结果（手撕题其他高频）                                   |
+| [simple-future-demo](./simple-future-demo/)                                     | 手写简易 Future（阻塞队列存结果，大厂手撕版）                                       |
+| [redis-distributed-lock-demo](./redis-distributed-lock-demo/)                   | Redis 分布式锁（本地模拟 + 口述/Lua 对照）                                     |
+
 
 ## 二、手撕 / 数据结构实现
 
-| 文件夹 | 内容 |
-|--------|------|
-| [my-arraylist-demo](./my-arraylist-demo/) | 手写简易 ArrayList（扩容 1.5 倍） |
-| [my-hashmap-demo](./my-hashmap-demo/) | 手写简易 HashMap（数组+链表、扩容） |
-| [lru-cache-demo](./lru-cache-demo/) | LRU：LinkedHashMap + 手写链表+HashMap |
-| [concurrent-lru-demo](./concurrent-lru-demo/) | 线程安全 LRU（读写锁，大厂并发版） |
+
+| 文件夹                                           | 内容                               |
+| --------------------------------------------- | -------------------------------- |
+| [my-arraylist-demo](./my-arraylist-demo/)     | 手写简易 ArrayList（扩容 1.5 倍）         |
+| [my-hashmap-demo](./my-hashmap-demo/)         | 手写简易 HashMap（数组+链表、扩容）           |
+| [lru-cache-demo](./lru-cache-demo/)           | LRU：LinkedHashMap + 手写链表+HashMap |
+| [concurrent-lru-demo](./concurrent-lru-demo/) | 线程安全 LRU（读写锁，大厂并发版）              |
+
 
 ## 三、Java 基础（口述 / 原理）
 
-| 文件夹 | 内容 |
-|--------|------|
-| [copy_demo](./copy_demo/) | 引用拷贝、浅拷贝、深拷贝 |
-| [equals-hashcode-demo](./equals-hashcode-demo/) | equals 与 hashCode、HashSet 行为 |
-| [threadlocal-demo](./threadlocal-demo/) | ThreadLocal 使用与注意点 |
-| [reflection-demo](./reflection-demo/) | 反射：Class、构造、方法调用 |
-| [serialization_obj_create_demo](./serialization_obj_create_demo/) | 序列化/反序列化创建对象 |
-| [comparable-comparator-demo](./comparable-comparator-demo/) | Comparable / Comparator 排序（集合、口述） |
-| [generic-demo](./generic-demo/) | 泛型类、泛型方法（口述常写） |
-| [annotation-validation-demo](./annotation-validation-demo/) | 自定义注解 + 运行时校验（@NotNull、@Length） |
+
+| 文件夹                                                               | 内容                                |
+| ----------------------------------------------------------------- | --------------------------------- |
+| [copy_demo](./copy_demo/)                                         | 引用拷贝、浅拷贝、深拷贝                      |
+| [equals-hashcode-demo](./equals-hashcode-demo/)                   | equals 与 hashCode、HashSet 行为      |
+| [threadlocal-demo](./threadlocal-demo/)                           | ThreadLocal 使用与注意点                |
+| [reflection-demo](./reflection-demo/)                             | 反射：Class、构造、方法调用                  |
+| [serialization_obj_create_demo](./serialization_obj_create_demo/) | 序列化/反序列化创建对象                      |
+| [comparable-comparator-demo](./comparable-comparator-demo/)       | Comparable / Comparator 排序（集合、口述） |
+| [generic-demo](./generic-demo/)                                   | 泛型类、泛型方法（口述常写）                    |
+| [annotation-validation-demo](./annotation-validation-demo/)       | 自定义注解 + 运行时校验（@NotNull、@Length）   |
+
 
 ## 四、设计模式（创建型 / 行为型）
 
-| 文件夹 | 内容 |
-|--------|------|
-| [observer-pattern-demo](./observer-pattern-demo/) | 观察者模式（技术栈行为型高频） |
+
+| 文件夹                                               | 内容               |
+| ------------------------------------------------- | ---------------- |
+| [observer-pattern-demo](./observer-pattern-demo/) | 观察者模式（技术栈行为型高频）  |
 | [strategy-pattern-demo](./strategy-pattern-demo/) | 策略模式（技术栈行为型+OCP） |
-| [factory-pattern-demo](./factory-pattern-demo/) | 简单工厂 + 工厂方法（创建型） |
-| [chain-template-demo](./chain-template-demo/) | 责任链 + 模板方法（行为型） |
+| [factory-pattern-demo](./factory-pattern-demo/)   | 简单工厂 + 工厂方法（创建型） |
+| [chain-template-demo](./chain-template-demo/)     | 责任链 + 模板方法（行为型）  |
+
 
 ## 五、锁与并发工具
 
-| 文件夹 | 内容 |
-|--------|------|
-| [lock_demo](./lock_demo/) | 锁的实践（可见性、可重入、实战示例） |
-| [concurrent_tools_demo](./concurrent_tools_demo/) | 并发工具使用演示 |
+
+| 文件夹                                               | 内容                 |
+| ------------------------------------------------- | ------------------ |
+| [lock_demo](./lock_demo/)                         | 锁的实践（可见性、可重入、实战示例） |
+| [concurrent_tools_demo](./concurrent_tools_demo/) | 并发工具使用演示           |
+
 
 ## 六、Java 后端 / Spring 相关
 
-| 文件夹 | 内容 |
-|--------|------|
-| [JavaSE](./JavaSE/) | **Java SE 系统学习**（Maven 项目）：基础语法、OOP、异常与 IO、泛型/反射/注解、多线程与并发、新特性、集合与框架示例；与上方按题型的手撕/口述 demo 互补 |
-| [dynamic-proxy-private-field-demo](./dynamic-proxy-private-field-demo/) | 动态代理与私有属性（AOP/事务相关） |
-| [spring-transaction-basic-demo](./spring-transaction-basic-demo/) | Spring 事务基础 |
-| [spring-transaction-propagation-demo](./spring-transaction-propagation-demo/) | 事务传播行为 |
-| [spring-transaction-invalidation-demo](./spring-transaction-invalidation-demo/) | 事务失效场景 |
-| [springboot-startup-demo](./springboot-startup-demo/) | Spring Boot 启动流程（Runner、Listener、Processor） |
-| [springboot-autoconfig-demo](./springboot-autoconfig-demo/) | 自动配置与自定义 Starter |
-| [springmvc-vs-springboot](./springmvc-vs-springboot/) | Spring MVC 与 Spring Boot Web 对比 |
+
+| 文件夹                                                                             | 内容                                                                                          |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [JavaSE](./JavaSE/)                                                             | **Java SE 系统学习**（Maven 项目）：基础语法、OOP、异常与 IO、泛型/反射/注解、多线程与并发、新特性、集合与框架示例；与上方按题型的手撕/口述 demo 互补 |
+| [dynamic-proxy-private-field-demo](./dynamic-proxy-private-field-demo/)         | 动态代理与私有属性（AOP/事务相关）                                                                         |
+| [spring-transaction-basic-demo](./spring-transaction-basic-demo/)               | Spring 事务基础                                                                                 |
+| [spring-transaction-propagation-demo](./spring-transaction-propagation-demo/)   | 事务传播行为                                                                                      |
+| [spring-transaction-invalidation-demo](./spring-transaction-invalidation-demo/) | 事务失效场景                                                                                      |
+| [springboot-startup-demo](./springboot-startup-demo/)                           | Spring Boot 启动流程（Runner、Listener、Processor）                                                 |
+| [springboot-autoconfig-demo](./springboot-autoconfig-demo/)                     | 自动配置与自定义 Starter                                                                            |
+| [springmvc-vs-springboot](./springmvc-vs-springboot/)                           | Spring MVC 与 Spring Boot Web 对比                                                             |
+
 
 ---
 
@@ -107,3 +119,4 @@
   - [alternate-print-demo](./alternate-print-demo/)：两线程 **交替打印** 同一序列（如 A 打 1、B 打 2、A 打 3…）。  
   - [abc-order-print-demo](./abc-order-print-demo/)：三线程 **轮流打印** A B C A B C…。  
   三者题型不同，无重复。
+

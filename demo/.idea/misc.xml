@@ -12,6 +12,7 @@
         <option value="$PROJECT_DIR$/dynamic-proxy-private-field-demo/pom.xml" />
         <option value="$PROJECT_DIR$/spring-transaction-basic-demo/pom.xml" />
         <option value="$PROJECT_DIR$/spring-transaction-invalidation-demo/pom.xml" />
+        <option value="$PROJECT_DIR$/JavaSE/pom.xml" />
       </list>
     </option>
   </component>
