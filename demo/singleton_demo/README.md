@@ -1,6 +1,7 @@
 # 单例模式（Singleton Pattern）详解 - 面试必备
 
-本项目全面演示了 Java 中单例模式的7种常见实现方式，并详细说明了每种方式的关键步骤和作用，非常适合面试准备。
+本项目全面演示了 Java 中单例模式的 **7 种** 常见实现方式，并详细说明了每种方式的关键步骤和作用，非常适合面试准备。  
+**校招手撕重点**：双重检查锁定（DCL）、静态内部类、枚举——建议至少能闭卷写出 DCL 与静态内部类。
 
 ## 📁 目录结构
 
@@ -396,11 +397,11 @@ enum Singleton {
 
 ## 🚀 如何运行
 
-```bash
-# 编译
-javac singleton_demo/SingletonDemo.java
+在 **demo/singleton_demo** 目录下执行（与其它 demo 一致）：
 
-# 运行
+```bash
+cd demo/singleton_demo
+javac -d . *.java
 java singleton_demo.SingletonDemo
 ```
 

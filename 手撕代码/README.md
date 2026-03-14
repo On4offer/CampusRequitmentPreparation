@@ -38,3 +38,4 @@
 1. **Java**：单例、LRU、生产者-消费者、交替打印 建议能闭卷写；ArrayList/HashMap 能讲清扩容与流程。
 2. **SQL**：先练熟四表模型下的多表 JOIN 和分组聚合，再练窗口排名和连续/留存。
 3. 算法题（链表、树、DP、二分、滑动窗口等）放在 **算法题** 专用文件夹，本目录不重复收录。
+4. **可运行 demo**：本目录题目对应的可运行代码与更多题型（手写 Future、并发 LRU、Redis 锁、工厂/责任链等）见仓库 **demo/** 目录及 [demo/README.md](../demo/README.md)、[demo/DEMO覆盖审阅.md](../demo/DEMO覆盖审阅.md)。
