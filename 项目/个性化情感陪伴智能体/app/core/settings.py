@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_ENV_FILE = _PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Use an absolute path so IDE/working-directory differences won't break loading.
+        env_file=str(_DEFAULT_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )

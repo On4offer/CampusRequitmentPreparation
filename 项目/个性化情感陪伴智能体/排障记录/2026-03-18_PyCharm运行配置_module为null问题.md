@@ -135,6 +135,22 @@
 排查要点：
 - 确保最终启动命令里 **只出现一次** `...\\.venv\\Scripts\\python.exe`
 
+#### D-2 真实踩坑与最终修复：PyCharm 未填写 “.env 文件路径” 导致 `Missing LLM_API_KEY`
+
+现象：
+- 在 Swagger `/docs` 中调用 `POST /chat` 返回 500，响应体为：
+  - `Missing LLM_API_KEY. Create a .env file (see .env.example).`
+
+根因：
+- PyCharm 的 Run Configuration 中 “`.env 文件路径`” 为空时，IDE 启动的工作目录/环境加载可能与命令行不同，导致 `pydantic-settings` 未能读取到项目根目录下的 `.env`，从而 `llm_api_key` 仍为空。
+
+修复（已验证有效）：
+- 在 Run Configuration 中显式填入：
+  - `<项目根目录>\\.env`
+  例如：
+  - `D:\\Users\\hzr08\\Desktop\\研二下\\校招学习\\项目\\个性化情感陪伴智能体\\.env`
+- Stop 后重新 Run，再测 `/chat` 即可返回 200。
+
 ### 方案 C（推荐）：用 script + `-m uvicorn ...` 启动（最不容易踩坑）
 
 Run Configuration 用：
