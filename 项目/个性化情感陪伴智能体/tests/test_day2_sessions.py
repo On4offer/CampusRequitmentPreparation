@@ -68,13 +68,15 @@ def test_session_memory_appends_history(client_and_fake_llm):
     r2 = client.post("/chat", json={"user_id": "u1", "session_id": "s1", "message": "你还记得我刚说了什么吗？"})
     assert r2.status_code == 200
 
-    # Two calls to LLM
-    assert len(fake.calls) == 2
-    _dump_call("call1", fake.calls[0])
-    _dump_call("call2", fake.calls[1])
+    # 每次 /chat 会先调情绪 LLM、再调对话 LLM，故 2 轮共 4 次调用
+    assert len(fake.calls) == 4
+    _dump_call("emotion1", fake.calls[0])
+    _dump_call("chat1", fake.calls[1])
+    _dump_call("emotion2", fake.calls[2])
+    _dump_call("chat2", fake.calls[3])
 
-    # Second call should include history (previous user + assistant) before the new user message.
-    second = fake.calls[1]
+    # 第二轮对话的 LLM 调用应带上历史（前一轮 user + assistant）
+    second = fake.calls[3]
     roles = [m["role"] for m in second]
     assert roles[0] == "system"
     # history user
@@ -92,11 +94,15 @@ def test_session_isolation(client_and_fake_llm):
     client.post("/chat", json={"user_id": "u1", "session_id": "s2", "message": "B"})
     client.post("/chat", json={"user_id": "u1", "session_id": "s1", "message": "C"})
 
-    assert len(fake.calls) == 3
-    _dump_call("s1-A", fake.calls[0])
-    _dump_call("s2-B", fake.calls[1])
-    _dump_call("s1-C", fake.calls[2])
-    third = fake.calls[2]
+    # 每轮 /chat = 1 次情绪 + 1 次对话，共 3 轮 -> 6 次
+    assert len(fake.calls) == 6
+    _dump_call("s1-A emotion", fake.calls[0])
+    _dump_call("s1-A chat", fake.calls[1])
+    _dump_call("s2-B emotion", fake.calls[2])
+    _dump_call("s2-B chat", fake.calls[3])
+    _dump_call("s1-C emotion", fake.calls[4])
+    _dump_call("s1-C chat", fake.calls[5])
+    third = fake.calls[5]
 
     # Third call is for s1; it should include history from s1 (A and echo:A), but not from s2 (B).
     assert any(m["role"] == "user" and m["content"] == "A" for m in third)
@@ -113,10 +119,13 @@ def test_session_reset_clears_history(client_and_fake_llm):
     assert rr.json()["existed"] is True
 
     client.post("/chat", json={"user_id": "u1", "session_id": "s1", "message": "after"})
-    assert len(fake.calls) == 2
-    _dump_call("before-reset", fake.calls[0])
-    _dump_call("after-reset", fake.calls[1])
-    second = fake.calls[1]
+    # 2 轮 /chat -> 4 次调用；reset 后第二轮不应带 "hello" 历史
+    assert len(fake.calls) == 4
+    _dump_call("before-reset emotion", fake.calls[0])
+    _dump_call("before-reset chat", fake.calls[1])
+    _dump_call("after-reset emotion", fake.calls[2])
+    _dump_call("after-reset chat", fake.calls[3])
+    second = fake.calls[3]
     # After reset, history should not include previous "hello"
     assert not any(m["role"] == "user" and m["content"] == "hello" for m in second)
 

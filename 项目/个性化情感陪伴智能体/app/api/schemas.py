@@ -70,3 +70,36 @@ class SessionResetResponse(BaseModel):
     # 作用：告诉客户端清空前该会话是否存在，方便客户端根据情况进行处理。
     # 约束：必须是一个布尔值，True 表示存在，False 表示不存在。
 
+
+# ---------- Day3: Trace（可观测性） ----------
+
+
+class TraceStepOut(BaseModel):
+    """Trace 的 step 输出结构（API 返回用）。"""
+
+    name: str
+    start_ms: int
+    end_ms: int
+    input_summary: str | None = None
+    output_summary: str | None = None
+    error: str | None = None
+
+
+class TraceRecordOut(BaseModel):
+    """单条 Trace 记录输出结构。"""
+
+    trace_id: str
+    user_id: str
+    session_id: str
+    message: str
+    timestamp_ms: int
+    steps: list[TraceStepOut]
+    decision: dict
+    metrics: dict
+
+
+class TraceListResponse(BaseModel):
+    """某会话下 Trace 列表响应。"""
+
+    items: list[TraceRecordOut]
+
