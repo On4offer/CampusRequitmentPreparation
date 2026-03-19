@@ -40,6 +40,11 @@ class TraceDecision(BaseModel):
     mode_reason: str | None = None
     safety_mode: bool | None = None
     safety_trigger_reason: str | None = None  # Day4：触发安全模式的原因（如命中关键词）
+    # V1 工具占位：mode=工具 时填写，便于 V3 真实接入
+    intended_tool: str | None = None  # 如 weather / memo / time / unknown
+    tool_params_placeholder: dict | None = None
+    # V2 RAG：本轮命中的长期记忆 id/type/score
+    memory_hits: list | None = None  # [{"id": str, "type": str, "score": float}, ...]
 
 
 class TraceMetrics(BaseModel):

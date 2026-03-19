@@ -41,19 +41,20 @@ def test_trace_contains_mode_and_mode_reason(monkeypatch):
     t = c.get(f"/trace/{r.json()['trace_id']}").json()
     assert t["decision"].get("mode") is not None
     assert t["decision"].get("mode_reason") is not None
-    assert t["decision"]["mode"] in ("闲聊", "倾听", "安慰", "工作")
+    assert t["decision"]["mode"] in ("闲聊", "倾听", "安慰", "工作", "工具")
 
 
 def test_explicit_listen_overrides_emotion(monkeypatch):
     """显式「只想吐槽」-> mode=倾听。"""
-    mode, reason = decide_mode("别安慰我，我只想吐槽", "低落", 2)
+    mode, reason, intended_tool, _ = decide_mode("别安慰我，我只想吐槽", "低落", 2)
     assert mode == "倾听"
+    assert intended_tool is None
     assert "倾听" in reason or "吐槽" in reason or "显式" in reason
 
 
 def test_mode_prompts_exist():
-    """四个 mode 均有对应 prompt 模板。"""
-    for m in ("闲聊", "倾听", "安慰", "工作"):
+    """五类 mode（含工具）均有对应 prompt 模板。"""
+    for m in ("闲聊", "倾听", "安慰", "工作", "工具"):
         p = get_system_prompt_for_mode(m)
         assert p and len(p) > 10
         assert m in p or "模式" in p

@@ -2,11 +2,15 @@ from __future__ import annotations  # 允许在函数注解中使用当前类名
 
 """FastAPI 应用入口（ASGI app）。"""
 
+from pathlib import Path
+
 from fastapi import FastAPI  # FastAPI 应用类
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 
 from app.api.routes import router as api_router    # API 路由
+from app.core.settings import settings
+from app.policy import reload_policy_config
 
 # Swagger UI 放大字体，便于浏览器阅读（覆盖默认小字号）
 SWAGGER_CUSTOM_CSS = """
@@ -44,6 +48,11 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Emotional Companion Agent", version="0.1.0", docs_url=None)
     app.include_router(api_router)
+
+    # V1：启动时加载共情策略配置（POLICY_CONFIG_PATH 非空时从文件加载）
+    _project_root = Path(__file__).resolve().parents[1]
+    _config_path = (_project_root / settings.policy_config_path) if settings.policy_config_path else None
+    reload_policy_config(_config_path)
 
     @app.get("/docs", include_in_schema=False)
     async def custom_swagger_ui_html():

@@ -37,6 +37,8 @@ class ChatResponse(BaseModel):
     user_id: str
     session_id: str
     debug: dict | None = None
+    # V2 RAG：本轮引用的记忆（id/type/score）
+    citations: list | None = None
 
 
 class HealthResponse(BaseModel):
@@ -102,4 +104,49 @@ class TraceListResponse(BaseModel):
     """某会话下 Trace 列表响应。"""
 
     items: list[TraceRecordOut]
+
+
+# ---------- V1: 长期记忆（LTM）占位 ----------
+
+
+class LTMWriteRequest(BaseModel):
+    """写入一条 LTM 的请求体。"""
+
+    user_id: str = Field(default="default", description="所属用户")
+    type: str = Field(..., description="Preference | Profile | Event | Constraint")
+    content: str = Field(..., min_length=1, description="记忆内容")
+    source: str = Field(default="", description="来源")
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="置信度 0~1")
+    tags: list[str] = Field(default_factory=list, description="可选标签")
+
+
+class LTMItemOut(BaseModel):
+    """单条 LTM 输出（API 返回）。"""
+
+    id: str
+    user_id: str
+    type: str
+    content: str
+    created_at: int
+    source: str
+    confidence: float
+    tags: list[str]
+    is_active: bool
+    updated_at: int
+    embedding_status: str
+
+
+class LTMPatchRequest(BaseModel):
+    """更新一条 LTM（局部更新）。"""
+
+    content: str | None = Field(default=None, min_length=1, description="记忆内容")
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0, description="置信度 0~1")
+    tags: list[str] | None = Field(default=None, description="可选标签")
+    is_active: bool | None = Field(default=None, description="是否生效")
+
+
+class LTMListResponse(BaseModel):
+    """LTM 列表响应。"""
+
+    items: list[LTMItemOut]
 

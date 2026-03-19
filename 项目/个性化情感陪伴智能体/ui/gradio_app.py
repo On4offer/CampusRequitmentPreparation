@@ -67,6 +67,18 @@ def chat_turn(
         f"**user_id**：{body.get('user_id', '')}",
         f"**session_id**：{body.get('session_id', '')}",
     ]
+    citations = body.get("citations") or []
+    diagnosis_lines.append(f"**命中记忆数**：{len(citations)}")
+    if citations:
+        diagnosis_lines.append("**citations**：")
+        for c in citations[:5]:
+            diagnosis_lines.append(
+                "- id=`{}` type=`{}` score={}".format(
+                    c.get("id", "-"),
+                    c.get("type", "-"),
+                    c.get("score", "-"),
+                )
+            )
     trace_json_str = ""
 
     if trace_id:

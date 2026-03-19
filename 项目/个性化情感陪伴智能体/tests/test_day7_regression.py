@@ -62,6 +62,7 @@ def test_regression_v0_stability(monkeypatch):
         expect_risk = case.get("expect_risk_tier")
         expect_mode = case.get("expect_mode")
         expect_emotion = case.get("expect_emotion_label")
+        expect_intended_tool = case.get("expect_intended_tool")
 
         r = client.post("/chat", json={"message": message, "user_id": "r", "session_id": "s"})
         assert r.status_code == 200, f"message={message!r} -> {r.status_code}"
@@ -81,3 +82,6 @@ def test_regression_v0_stability(monkeypatch):
         if expect_emotion is not None:
             got = emotion.get("label")
             assert got == expect_emotion, f"case[{idx}] emotion label: got {got!r} expect {expect_emotion!r}"
+        if expect_intended_tool is not None:
+            got = decision.get("intended_tool")
+            assert got == expect_intended_tool, f"case[{idx}] intended_tool: got {got!r} expect {expect_intended_tool!r}"

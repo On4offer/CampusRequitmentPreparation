@@ -9,15 +9,22 @@ FastAPI 路由层（API 行为入口）。
 - /sessions/reset：清空某个会话的短期记忆（便于演示与调试）
 """
 
+import logging
 import time
 import uuid
 
 from fastapi import APIRouter, HTTPException
 
+logger = logging.getLogger(__name__)
+
 from app.api.schemas import (
     ChatRequest,
     ChatResponse,
     HealthResponse,
+    LTMItemOut,
+    LTMListResponse,
+    LTMPatchRequest,
+    LTMWriteRequest,
     SessionResetRequest,
     SessionResetResponse,
     TraceListResponse,
@@ -25,10 +32,13 @@ from app.api.schemas import (
 )
 from app.core.settings import settings
 from app.emotion import analyze_emotion
+from app.emotion.log import append_emotion_record
 from app.llm.client import ChatMessage, LLMClient, LLMClientError
 from app.policy import decide_mode, get_system_prompt_for_mode
+from app.memory.ltm import LTMItem, ltm_store
 from app.memory.stm import trim_messages_by_char_budget
 from app.memory.store import session_store
+from app.rag import ltm_retriever
 from app.trace.models import TraceDecision, TraceMetrics, TraceRecord, TraceRequest, TraceStep
 from app.trace.store import InMemoryTraceStore, default_file_store, now_ms
 
@@ -154,6 +164,143 @@ async def list_traces(user_id: str | None = None, session_id: str | None = None,
     return TraceListResponse(items=items)
 
 
+# ---------- V1: 长期记忆（LTM）占位 API ----------
+
+
+@router.post("/memory/ltm")
+async def post_memory_ltm(body: LTMWriteRequest) -> dict:
+    """
+    写入一条长期记忆（占位）。
+    user_id 在 body 中；不接入 /chat 主链路，V2 再做检索与注入。
+    """
+    user_id = session_store.ensure_user_id(body.user_id)
+    if body.type not in ("Preference", "Profile", "Event", "Constraint"):
+        raise HTTPException(status_code=400, detail="type must be one of: Preference, Profile, Event, Constraint")
+    ts = now_ms()
+    item = LTMItem(
+        id="",
+        user_id=user_id,
+        type=body.type,
+        content=body.content,
+        created_at=ts,
+        source=body.source,
+        confidence=body.confidence,
+        tags=body.tags,
+        is_active=True,
+        updated_at=ts,
+        embedding_status="ready",
+    )
+    lid = ltm_store.put(user_id, item)
+    # V2：写入 LTM 后同步进检索索引，便于 /chat 召回
+    item_with_id = item.model_copy(update={"id": lid})
+    ltm_retriever.index_item(item_with_id)
+    return {"id": lid}
+
+
+@router.get("/memory/ltm")
+async def get_memory_ltm(
+    user_id: str | None = None,
+    type: str | None = None,
+    q: str | None = None,
+    limit: int = 10,
+) -> LTMListResponse:
+    """
+    按 user_id 查询 LTM 列表，可选 type 过滤；占位实现不接向量检索。
+    """
+    uid = session_store.ensure_user_id(user_id)
+    if type is not None and type not in ("Preference", "Profile", "Event", "Constraint"):
+        raise HTTPException(status_code=400, detail="type must be one of: Preference, Profile, Event, Constraint")
+    items = ltm_store.list_by_user(uid, type=type, limit=limit, q=q, only_active=True)
+    return LTMListResponse(
+        items=[
+            LTMItemOut(
+                id=x.id,
+                user_id=x.user_id,
+                type=x.type,
+                content=x.content,
+                created_at=x.created_at,
+                source=x.source,
+                confidence=x.confidence,
+                tags=x.tags,
+                is_active=x.is_active,
+                updated_at=x.updated_at,
+                embedding_status=x.embedding_status,
+            )
+            for x in items
+        ]
+    )
+
+
+@router.get("/memory/ltm/{id}")
+async def get_memory_ltm_by_id(id: str) -> LTMItemOut:
+    """按 id 查询一条 LTM（仅返回生效条目）。"""
+    x = ltm_store.get_by_id(id)
+    if x is None or not x.is_active:
+        raise HTTPException(status_code=404, detail="LTM item not found.")
+    return LTMItemOut(
+        id=x.id,
+        user_id=x.user_id,
+        type=x.type,
+        content=x.content,
+        created_at=x.created_at,
+        source=x.source,
+        confidence=x.confidence,
+        tags=x.tags,
+        is_active=x.is_active,
+        updated_at=x.updated_at,
+        embedding_status=x.embedding_status,
+    )
+
+
+@router.patch("/memory/ltm/{id}")
+async def patch_memory_ltm(id: str, body: LTMPatchRequest) -> LTMItemOut:
+    """局部更新一条长期记忆。"""
+    if (
+        body.content is None
+        and body.tags is None
+        and body.confidence is None
+        and body.is_active is None
+    ):
+        raise HTTPException(status_code=400, detail="No fields to update.")
+    updated = ltm_store.update_item(
+        id=id,
+        content=body.content,
+        tags=body.tags,
+        confidence=body.confidence,
+        is_active=body.is_active,
+        updated_at=now_ms(),
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="LTM item not found.")
+    if updated.is_active:
+        ltm_retriever.index_item(updated)
+    else:
+        ltm_retriever.remove_item(updated)
+    return LTMItemOut(
+        id=updated.id,
+        user_id=updated.user_id,
+        type=updated.type,
+        content=updated.content,
+        created_at=updated.created_at,
+        source=updated.source,
+        confidence=updated.confidence,
+        tags=updated.tags,
+        is_active=updated.is_active,
+        updated_at=updated.updated_at,
+        embedding_status=updated.embedding_status,
+    )
+
+
+@router.delete("/memory/ltm/{id}")
+async def delete_memory_ltm(id: str) -> dict:
+    """软删除一条长期记忆。"""
+    deleted = ltm_store.soft_delete(id=id, updated_at=now_ms())
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="LTM item not found.")
+    ltm_retriever.remove_item(deleted)
+    return {"ok": True, "id": id}
+
+
 @router.post("/chat")
 # 这个方法的req是ChatRequest类的实例，session_store是InMemorySessionStore类的实例
 # 作用域：async def 表示这是一个异步方法，作用域是整个方法体
@@ -184,12 +331,16 @@ async def chat(req: ChatRequest) -> ChatResponse:
     emotion_result = await analyze_emotion(req.message, llm=llm)
     safety_mode = emotion_result.risk_tier == "高风险"
     safety_trigger_reason = emotion_result.evidence if safety_mode else None
-    # Day5: 状态机输出 mode + mode_reason；高风险强制倾听，关注档优先倾听
-    mode, mode_reason = decide_mode(req.message, str(emotion_result.label), emotion_result.intensity)
-    if safety_mode:
+    # Day5/V1: 状态机输出 mode + mode_reason + 工具占位（intended_tool / tool_params_placeholder）
+    mode, mode_reason, intended_tool, tool_params_placeholder = decide_mode(
+        req.message, str(emotion_result.label), emotion_result.intensity
+    )
+    if safety_mode and getattr(settings, "safety_force_listen", True):
         mode, mode_reason = "倾听", "高风险安全模式优先倾听"
-    elif emotion_result.risk_tier == "关注":
+        intended_tool, tool_params_placeholder = None, None
+    elif emotion_result.risk_tier == "关注" and getattr(settings, "watch_tier_force_listen", True):
         mode, mode_reason = "倾听", "关注档优先倾听"
+        intended_tool, tool_params_placeholder = None, None
     system = SAFE_SYSTEM_PROMPT if safety_mode else get_system_prompt_for_mode(mode)
     emotion_for_trace = {
         "label": emotion_result.label,
@@ -197,6 +348,25 @@ async def chat(req: ChatRequest) -> ChatResponse:
         "evidence": emotion_result.evidence,
         "risk_tier": emotion_result.risk_tier,
     }
+
+    # V2 RAG：命中记忆与引用，默认无；检索成功时填充
+    memory_hits: list | None = None
+    citations: list | None = None
+
+    # V1 情绪落盘占位：可选将本条情绪写入 JSONL，便于后续情绪曲线/回访
+    if getattr(settings, "emotion_log_enabled", False) and settings.emotion_log_path:
+        append_emotion_record(
+            settings.emotion_log_path,
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+                "timestamp_ms": request_ts,
+                "label": emotion_for_trace["label"],
+                "intensity": emotion_for_trace["intensity"],
+                "risk_tier": emotion_for_trace["risk_tier"],
+                "trace_id": trace_id,
+            },
+        )
 
     def _mark_step(name: str, start_ms: int, end_ms: int, *, input_summary: str | None = None, output_summary: str | None = None, error: str | None = None) -> None:
         # 这里做成内部函数：减少重复代码，也更容易给你看清楚“结构是什么、如何复用”
@@ -210,6 +380,43 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 error=error,
             )
         )
+
+    # V2 RAG：可选检索 LTM 并注入 system；失败则降级（不中断主链路）
+    if getattr(settings, "rag_enabled", False):
+        s_rag = time.perf_counter()
+        try:
+            top_k = getattr(settings, "rag_top_k", 3)
+            min_score = getattr(settings, "rag_min_score", 0.0)
+            max_chars = getattr(settings, "rag_max_chars", 1200)
+            hits = ltm_retriever.retrieve(user_id=user_id, query=req.message, top_k=top_k, min_score=min_score)
+            e_rag = time.perf_counter()
+            evidence_blocks: list[str] = []
+            chars = 0
+            for h in hits:
+                block = f"[{h.item.type}] {h.item.content}"
+                if chars + len(block) > max_chars:
+                    break
+                evidence_blocks.append(block)
+                chars += len(block)
+            if evidence_blocks:
+                system = system + "\n\n【以下是与用户相关的长期记忆，请参考】\n" + "\n".join(evidence_blocks)
+            memory_hits = [{"id": h.item.id, "type": h.item.type, "score": round(h.score, 4)} for h in hits]
+            citations = memory_hits
+            _mark_step(
+                "retrieve_ltm",
+                start_ms=int((s_rag - t0) * 1000),
+                end_ms=int((e_rag - t0) * 1000),
+                input_summary=f"query_len={len(req.message)} top_k={top_k}",
+                output_summary=f"hits={len(hits)} ids={[x.item.id for x in hits]}",
+            )
+        except Exception as e:
+            _mark_step(
+                "retrieve_ltm",
+                start_ms=int((s_rag - t0) * 1000),
+                end_ms=int((time.perf_counter() - t0) * 1000),
+                input_summary=f"query_len={len(req.message)}",
+                error=str(e),
+            )
 
     # system：安全模式用 SAFE_SYSTEM_PROMPT，否则用状态机 mode 对应的 prompt 模板（Day5）
 
@@ -254,7 +461,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 trace_id=trace_id,
                 request=TraceRequest(user_id=user_id, session_id=session_id, message=req.message, timestamp_ms=request_ts),
                 steps=steps,
-                decision=TraceDecision(emotion=emotion_for_trace, mode=mode, mode_reason=mode_reason, safety_mode=safety_mode, safety_trigger_reason=safety_trigger_reason),
+                decision=TraceDecision(
+                    emotion=emotion_for_trace, mode=mode, mode_reason=mode_reason,
+                    safety_mode=safety_mode, safety_trigger_reason=safety_trigger_reason,
+                    intended_tool=intended_tool, tool_params_placeholder=tool_params_placeholder,
+                    memory_hits=memory_hits,
+                ),
                 metrics=TraceMetrics(latency_ms=latency_ms, token_in=None, token_out=None, model=settings.llm_model, degraded=True),
             )
         )
@@ -278,7 +490,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 trace_id=trace_id,
                 request=TraceRequest(user_id=user_id, session_id=session_id, message=req.message, timestamp_ms=request_ts),
                 steps=steps,
-                decision=TraceDecision(emotion=emotion_for_trace, mode=mode, mode_reason=mode_reason, safety_mode=safety_mode, safety_trigger_reason=safety_trigger_reason),
+                decision=TraceDecision(
+                    emotion=emotion_for_trace, mode=mode, mode_reason=mode_reason,
+                    safety_mode=safety_mode, safety_trigger_reason=safety_trigger_reason,
+                    intended_tool=intended_tool, tool_params_placeholder=tool_params_placeholder,
+                    memory_hits=memory_hits,
+                ),
                 metrics=TraceMetrics(latency_ms=latency_ms, token_in=None, token_out=None, model=settings.llm_model, degraded=True),
             )
         )
@@ -318,6 +535,9 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 mode_reason=mode_reason,
                 safety_mode=safety_mode,
                 safety_trigger_reason=safety_trigger_reason,
+                intended_tool=intended_tool,
+                tool_params_placeholder=tool_params_placeholder,
+                memory_hits=memory_hits,
             ),
             metrics=TraceMetrics(
                 latency_ms=latency_ms,
@@ -327,6 +547,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 degraded=False,
             ),
         )
+    )
+
+    # V1 可观测：/chat 成功时打一条结构化日志（trace_id、latency、mode、risk_tier）
+    logger.info(
+        "chat_done trace_id=%s latency_ms=%s mode=%s risk_tier=%s user_id=%s",
+        trace_id, latency_ms, mode, emotion_for_trace.get("risk_tier"), user_id,
     )
 
     debug = None    # debug 是一个字典，用于返回额外的调试信息
@@ -344,5 +570,5 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     # 返回 ChatResponse 类的实例，用于返回给客户端
     # 作用：将 reply/trace_id/user_id/session_id/debug 封装成一个对象，方便客户端处理
-    return ChatResponse(reply=reply, trace_id=trace_id, user_id=user_id, session_id=session_id, debug=debug)
+    return ChatResponse(reply=reply, trace_id=trace_id, user_id=user_id, session_id=session_id, debug=debug, citations=citations)
 

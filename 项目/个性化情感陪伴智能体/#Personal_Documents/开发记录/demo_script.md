@@ -48,7 +48,15 @@
 
 ---
 
-## 5. 切 session + 重置（约 20 秒）
+## 5. 工具占位演示（V1，约 20 秒）
+
+1. 在输入框输入：**帮我查天气** 或 **记一下明天开会**，点「发送」。
+2. 看诊断面板：**模式** 应为 **工具**，Trace JSON 中 `decision.intended_tool` 为 **weather** 或 **memo**。
+3. 助手回复可为占位话术（如「该能力即将上线」），体现工具分支已进入、trace 可审计。
+
+---
+
+## 6. 切 session + 重置（约 20 秒）
 
 1. 把 **session_id** 改为 **s2**，点「重置会话（清空记忆）」。
 2. 再发：**你还记得我刚说了什么吗？**
@@ -61,4 +69,5 @@
 - [ ] 聊天正常、诊断面板有 emotion / mode / trace_id / 耗时 / token
 - [ ] Trace JSON 与 GET /trace/{id} 一致
 - [ ] 安全模式输入触发 risk=高风险、safety_mode=true、回复克制
+- [ ] （V1）工具向输入（如「帮我查天气」）诊断 mode=工具、trace 含 intended_tool
 - [ ] 换 session 并重置后，新会话无旧记忆
