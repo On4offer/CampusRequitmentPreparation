@@ -7,7 +7,7 @@ from __future__ import annotations
 - 优点：简单、零依赖、便于快速迭代
 - 缺点：服务重启即丢失；多进程/多实例之间不共享
 
-后续若要工程化上线，可将该 Store 替换为 Redis/数据库实现。
+环境变量 REDIS_URL 非空时自动使用 Redis（`RedisSessionStore`）；否则为进程内实现。
 """
 
 import threading
@@ -105,10 +105,49 @@ class InMemorySessionStore:
                 del self._sessions[key] # 删除会话
             return existed # 返回会话是否存在结果
 
+    def list_sessions_for_user(self, user_id: str) -> list[tuple[str, int]]:
+        """
+        列出某用户下已有 STM 的会话。
 
-session_store = InMemorySessionStore()  
-# 类是InMemorySessionStore，实例是session_store，和Java相比，Python的类实例化后，对象名就是实例名
-# 类是模板，实例是具体的对象，每个实例都有自己的状态和行为
-# Java 命名规范是驼峰命名法，而Python的命名规范是下划线命名法
-# 同时不需要new 关键字
+        返回 (session_id, message_count)，按消息数降序、再按 session_id 升序，便于前端展示「最近活跃」。
+        """
 
+        with self._lock:
+            out: list[tuple[str, int]] = []
+            for (uid, sid), state in self._sessions.items():
+                if uid == user_id:
+                    out.append((sid, len(state.messages)))
+            out.sort(key=lambda x: (-x[1], x[0]))
+            return out
+
+    def get_messages(self, *, user_id: str, session_id: str) -> list[ChatMessage] | None:
+        """若会话不存在返回 None；否则返回消息列表副本。"""
+
+        key = (user_id, session_id)
+        with self._lock:
+            state = self._sessions.get(key)
+            if state is None:
+                return None
+            return list(state.messages)
+
+    def clear_all_sessions_for_user(self, user_id: str) -> int:
+        """删除该用户在 STM 中的全部会话；返回清除的会话数。"""
+        with self._lock:
+            keys = [k for k in self._sessions if k[0] == user_id]
+            for k in keys:
+                del self._sessions[k]
+            return len(keys)
+
+
+def _make_session_store():
+    from app.core.settings import settings
+
+    u = (settings.redis_url or "").strip()
+    if u:
+        from app.memory.redis_stm import RedisSessionStore
+
+        return RedisSessionStore(u)
+    return InMemorySessionStore()
+
+
+session_store = _make_session_store()

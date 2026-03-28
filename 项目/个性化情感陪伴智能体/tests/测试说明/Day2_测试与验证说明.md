@@ -39,14 +39,12 @@ python -m pytest -q -s
 - `DAY2_TEST_DEBUG=1`：开启测试内的调试打印
 - `-s`：关闭 pytest 对 stdout 的捕获，让 `print()` 直接显示
 
-你会看到类似输出（示意）：
+你会看到类似输出（示意；当前主对话走 LangChain，**仅情绪分析**会打印到 `fake.calls`）：
 
 ```text
-[call2] messages=4
-  00 system: 你是一个温和、克制、尊重边界的情感陪伴助手。...
-  01 user: 你好
-  02 assistant: echo:你好
-  03 user: 你还记得我刚说了什么吗？
+[emotion2] messages=...
+  00 system: ...情绪识别助手...
+  01 user: 你还记得我刚说了什么吗？
 ```
 
 ### 1.3 预期输出
@@ -61,18 +59,16 @@ python -m pytest -q -s
 测试文件：`tests/test_day2_sessions.py`
 
 - **test_session_memory_appends_history**
-  - 验证同一 `user_id + session_id` 的第二次 `/chat` 调用，会把上一轮 user/assistant 消息作为 **history** 注入到 LLM messages 中
+  - 验证同一 `user_id + session_id` 第二轮对话后，**STM**（`GET /sessions/{id}/messages`）含上一轮 user/assistant；主回复为 conftest 固定 mock 文案
 
 - **test_session_isolation**
-  - 验证不同 `session_id` 的历史严格隔离
-  - `s1` 的历史不会泄漏到 `s2`
+  - 验证不同 `session_id` 的历史严格隔离（`s1` 不泄漏到 `s2`）
 
 - **test_session_reset_clears_history**
-  - 验证 `POST /sessions/reset` 后，同一 `session_id` 的历史被清空
-  - reset 后再次 `/chat` 不应包含 reset 前的历史
+  - 验证 `POST /sessions/reset` 后 STM 不含 reset 前用户句
 
 ### 1.5 为什么 pytest 不会消耗 DeepSeek 费用？
-测试里会 mock 掉真实 LLM 客户端（替换 `routes._build_llm_client`），不会发生网络请求。
+测试里 **autouse mock 主链 `ChatOpenAI`**，并替换 **`routes._build_llm_client`**（情绪等），不会发生网络请求。
 因此：
 - 不依赖 API Key
 - 不依赖网络

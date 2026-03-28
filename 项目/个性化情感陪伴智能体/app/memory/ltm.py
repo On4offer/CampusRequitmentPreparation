@@ -3,13 +3,14 @@
 
 类型：Preference / Profile / Event / Constraint。
 最小字段：id, user_id, type, content, created_at, source, confidence, tags（可选）。
-占位实现为内存存储；V2 可替换为向量库/DB 并在此接口上做检索。
+占位实现为内存存储；环境变量 DATABASE_URL 非空时使用 SQL（见 `ltm_sql.SQLLTMStore`）。向量检索可在同接口上扩展。
 """
 
 from __future__ import annotations
 
 import threading
 import uuid
+from collections.abc import Iterator
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -103,17 +104,20 @@ class InMemoryLTMStore:
         user_id: str,
         type: LTMType | None = None,
         limit: int = 20,
+        offset: int = 0,
         q: str | None = None,
         only_active: bool = True,
-    ) -> list[LTMItem]:
-        """按 user_id 列表，可选 type 过滤；按写入顺序倒序，最多 limit 条。"""
+        source: str | None = None,
+    ) -> tuple[list[LTMItem], int]:
+        """按 user_id 列表，可选 type / source（精确匹配）/ 全文 q 过滤；新在前。返回 (当前页, 命中总数)。"""
         q_norm = (q or "").strip().lower()
+        src_norm = (source or "").strip()
+        off = max(0, int(offset))
+        lim = max(1, int(limit))
         with self._lock:
             ids = self._by_user.get(user_id, [])[::-1]
-            out: list[LTMItem] = []
+            matching: list[LTMItem] = []
             for i in ids:
-                if len(out) >= limit:
-                    break
                 item = self._by_id.get(i)
                 if item is None:
                     continue
@@ -121,10 +125,41 @@ class InMemoryLTMStore:
                     continue
                 if type is not None and item.type != type:
                     continue
+                if src_norm and (item.source or "").strip() != src_norm:
+                    continue
                 if q_norm and q_norm not in item.content.lower():
                     continue
-                out.append(item)
-            return out
+                matching.append(item)
+            total = len(matching)
+            page = matching[off : off + lim]
+            return page, total
+
+    def iter_active_ltm_items(self) -> Iterator[LTMItem]:
+        """供 RAG 启动预热（内存实现）。"""
+        with self._lock:
+            snap = [it for it in self._by_id.values() if it.is_active]
+        for it in snap:
+            yield it
 
 
-ltm_store = InMemoryLTMStore()
+def _make_ltm_store():
+    import logging
+
+    from app.core.settings import settings
+
+    u = (settings.database_url or "").strip()
+    if not u:
+        return InMemoryLTMStore()
+    try:
+        from app.memory.ltm_sql import SQLLTMStore
+
+        return SQLLTMStore(u)
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "LTM：DATABASE_URL 初始化失败，回退进程内内存存储（隐式/显式 LTM 不落库）：%s",
+            e,
+        )
+        return InMemoryLTMStore()
+
+
+ltm_store = _make_ltm_store()

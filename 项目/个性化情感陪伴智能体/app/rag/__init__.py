@@ -1,6 +1,6 @@
-"""RAG 模块（V2）：最小 embedding/index/retriever。"""
+"""RAG 模块（V2）：最小 embedding/index/retriever。V4：混合检索 BM25。"""
 
-from app.rag.embedder import embed_text
+from app.rag.embedder import embed_text, tokenize
 from app.rag.index import InMemoryVectorIndex, ScoredId
 from app.rag.retriever import LTMRetriever, RetrievedMemory
 
@@ -10,6 +10,7 @@ ltm_retriever = LTMRetriever(index=_rag_index)
 
 __all__ = [
     "embed_text",
+    "tokenize",
     "InMemoryVectorIndex",
     "ScoredId",
     "LTMRetriever",

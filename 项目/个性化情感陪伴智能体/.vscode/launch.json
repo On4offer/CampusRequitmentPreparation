@@ -10,7 +10,7 @@
         "app.main:app",
         "--reload",
         "--host", "127.0.0.1",
-        "--port", "8075"
+        "--port", "8076"
       ],
       "cwd": "${workspaceFolder}",
       "jinja": true,

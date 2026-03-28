@@ -19,6 +19,13 @@ class _FakeLLM:
             "raw": {"choices": [{"message": {"content": "好的，我在这里。"}}]},
         }
 
+    async def chat_stream(self, messages, temperature: float = 0.7, meta_out=None):
+        await asyncio.sleep(0)
+        if meta_out is not None:
+            meta_out["request_id"] = "stream-test-id"
+        text = _FakeLLM.extract_text(await self.chat(messages, temperature=temperature))
+        yield text
+
     @staticmethod
     def extract_text(chat_response):
         return chat_response["raw"]["choices"][0]["message"]["content"]
@@ -83,4 +90,40 @@ def test_list_traces_by_session(monkeypatch):
     assert r.status_code == 200
     items = r.json()["items"]
     assert len(items) >= 2
+
+
+def test_chat_stream_sse_done(monkeypatch):
+    """POST /chat/stream 返回 SSE，末包 event=done 含 reply/trace_id。"""
+    import app.api.routes as routes
+
+    monkeypatch.setattr(routes, "_build_llm_client", lambda: _FakeLLM())
+    mem_store = InMemoryTraceStore()
+    monkeypatch.setattr(routes, "trace_store", mem_store)
+
+    c = TestClient(app)
+    with c.stream(
+        "POST",
+        "/chat/stream",
+        json={"message": "流式你好", "user_id": "u_stream", "session_id": "s_stream"},
+    ) as r:
+        assert r.status_code == 200
+        raw = b"".join(r.iter_bytes()).decode("utf-8")
+    assert "event" in raw or "meta" in raw
+    assert '"event": "done"' in raw or '"done"' in raw
+    assert "trace_id" in raw
+    assert "好的，我在这里" in raw
+
+
+def test_list_traces_requires_non_empty_session_id():
+    """GET /traces 省略或空 session_id 时返回 400，避免误用随机 UUID 静默空列表。"""
+    c = TestClient(app)
+    r = c.get("/traces", params={"limit": 5})
+    assert r.status_code == 400
+    assert "session_id" in (r.json().get("detail") or "").lower()
+
+    r2 = c.get("/traces", params={"user_id": "u1", "session_id": "", "limit": 5})
+    assert r2.status_code == 400
+
+    r3 = c.get("/traces", params={"user_id": "u1", "session_id": "   ", "limit": 5})
+    assert r3.status_code == 400
 

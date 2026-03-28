@@ -263,3 +263,13 @@ public class InformedConsentController extends BaseAdminController<TblInformedCo
 2. WAR：可部署到外部 Tomcat（继承 `SpringBootServletInitializer`）
 
 这是一个功能完整的医院信息系统 API 后端，采用分层架构，支持多数据源和多种业务场景。
+
+---
+
+## 优化建议（复盘）
+
+1. **双 ORM 边界**：JPA 与 MyBatis 并存时，明确新功能选型规则与事务边界，避免同一聚合跨两套访问混用导致不一致。
+2. **模块与包结构**：`intranet` Controller 较多时，可按领域分包或拆模块，降低单仓认知负担。
+3. **多数据源**：连接池、慢查询监控、报表只读实例路由等可逐步加强。
+4. **测试**：核心业务 Service 层补充单元测试；Mapper XML 对复杂 SQL 做集成测试。
+5. **文档**：对外接口契约（错误码、分页约定）集中维护，便于前后端与双后端对齐。

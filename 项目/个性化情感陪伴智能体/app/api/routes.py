@@ -5,60 +5,121 @@ FastAPI 路由层（API 行为入口）。
 
 本模块聚焦：
 - /health：健康检查
+- /emotion/stats：情绪日志聚合（仪表盘）
 - /chat：多轮对话入口（注入 STM 历史 + 调用 LLM + 写回会话）
+- /sessions：按用户列出 STM 会话；/sessions/{id}/messages 读取消息；DELETE 清空会话
 - /sessions/reset：清空某个会话的短期记忆（便于演示与调试）
+- /admin/eval/run、/admin/eval/jobs/{id}：异步评测跑批（运营鉴权）
 """
 
+import asyncio
+import json
 import logging
+import re
 import time
-import uuid
+from enum import Enum
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
 
+
+class EmotionWindow(str, Enum):
+    day = "day"
+    week = "week"
+
+
 from app.api.schemas import (
+    AdminHotConfigPatch,
+    AdminHotConfigSnapshot,
+    ChatMessageOut,
+    EmotionSeriesPoint,
+    EmotionStatsResponse,
+    EvalJobStatusResponse,
+    EvalRunRequest,
+    EvalRunResponse,
     ChatRequest,
     ChatResponse,
+    FeedbackExportResponse,
+    FeedbackItemOut,
+    FeedbackListResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     HealthResponse,
     LTMItemOut,
     LTMListResponse,
     LTMPatchRequest,
+    LTMUndoExtractRequest,
+    LTMUndoExtractResponse,
     LTMWriteRequest,
+    SessionDeleteResponse,
+    SessionItemOut,
+    SessionListResponse,
+    SessionMessagesResponse,
+    UserForgetRequest,
+    UserForgetResponse,
     SessionResetRequest,
     SessionResetResponse,
     TraceListResponse,
     TraceRecordOut,
+    ProfileSummary,
 )
 from app.core.settings import settings
+from app.eval.jobs import create_job, get_job, load_builtin_samples, parse_jsonl_lines, run_eval_job
 from app.emotion import analyze_emotion
+from app.emotion.stats import compute_emotion_stats, load_emotion_jsonl
 from app.emotion.log import append_emotion_record
-from app.llm.client import ChatMessage, LLMClient, LLMClientError
+from app.llm.client import ChatMessage, LLMClient
+from app.llm.user_visible_errors import llm_error_detail_for_client
 from app.policy import decide_mode, get_system_prompt_for_mode
 from app.memory.ltm import LTMItem, ltm_store
 from app.memory.stm import trim_messages_by_char_budget
 from app.memory.store import session_store
 from app.rag import ltm_retriever
+from app.rag.query_rewrite import rewrite_for_retrieval
+from app.tools import execute_tool
+from app.tools.router import route_tool_params
 from app.trace.models import TraceDecision, TraceMetrics, TraceRecord, TraceRequest, TraceStep
-from app.trace.store import InMemoryTraceStore, default_file_store, now_ms
-
-# Day4：安全模式时的系统提示（更克制、强调专业支持）
-SAFE_SYSTEM_PROMPT = (
-    "你处于安全模式。用户可能表达了自伤或他伤相关想法。"
-    "你必须：表达关心、建议联系现实中的亲友或专业心理/医疗支持，不要追问细节，不要给出任何可能加重风险的建议。"
-    "回复简短、温和、明确导向寻求专业帮助。"
+from app.trace.store import FileTraceStore, InMemoryTraceStore, default_file_store, now_ms
+from app.security.isolation import assert_ltm_access, assert_profile_access, assert_trace_access
+from app.quota.limiter import (
+    check_qps,
+    check_token_budget_before_main_llm,
+    consume_emotion_estimate,
+    consume_main_llm_usage,
+    get_daily_usage,
 )
-DEFAULT_SYSTEM_PROMPT = (
-    "你是一个温和、克制、尊重边界的情感陪伴助手。"
-    "如果用户表达自伤/他伤倾向，你要进入安全模式：建议联系现实支持与专业帮助，避免给出危险建议。"
+from app.safety.content_filter import merge_safety_trace_reason, sanitize_assistant_output, scan_user_input
+from app.feedback.store import append_feedback_row, read_feedback_all_for_user, read_feedback_tail
+from app.config.hot_config import merge_patch, snapshot_from_settings
+from app.services.chat_turn import (
+    finalize_chat_turn,
+    iter_chat_llm_text_deltas,
+    prepare_chat_until_llm,
+    run_llm_chat_and_finalize,
 )
-
 
 router = APIRouter()    # 路由层，作用是将 API 路由注册到 FastAPI 应用实例
 
 # Trace store（默认文件落盘；pytest 会 monkeypatch 成 InMemoryTraceStore）
 # 说明：把 store 做成模块级变量，方便测试替换（避免真实写磁盘）。
 trace_store = default_file_store()
+
+
+def _trace_safety_kwargs(
+    safety_mode: bool,
+    safety_trigger_reason: str | None,
+    output_filter_tags: list[str] | None,
+) -> dict:
+    """TraceDecision 的 safety_triggered / safety_reason（V5 内容安全可审计字段）。"""
+    st, sr = merge_safety_trace_reason(
+        safety_mode=safety_mode,
+        safety_trigger_reason=safety_trigger_reason,
+        output_filter_tags=output_filter_tags or [],
+    )
+    return {"safety_triggered": st, "safety_reason": sr}
 
 
 def _to_trace_out(rec: TraceRecord) -> TraceRecordOut:
@@ -80,39 +141,93 @@ def _to_trace_out(rec: TraceRecord) -> TraceRecordOut:
     )
 
 
-# 助手函数：构造 LLMClient，作用是从 settings 读取 LLM 配置并创建 LLMClient 实例
 def _build_llm_client() -> LLMClient:
-    """
-    构造 LLMClient（从 settings 读取 base_url/key/model 等配置）。
+    """测试 monkeypatch 入口；实现见 app.llm.factory。"""
+    from app.llm.factory import build_llm_client
 
-    注意：
-    - 若未配置 key，会返回 500 并提示如何配置 `.env`
-    - 测试中会 monkeypatch 此函数以 mock 掉真实网络调用
-    """
+    return build_llm_client()
 
-    # 从 settings 读取 LLM 配置
-    if not settings.llm_api_key:
-        # 若未配置 LLM_API_KEY，返回 500 并提示如何配置 .env
-        raise HTTPException(
-            status_code=500,
-            detail="Missing LLM_API_KEY. Create a .env file (see .env.example).",
+
+def _health_ping_redis(url: str) -> str:
+    try:
+        import redis
+
+        client = redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=2.0,
+            socket_timeout=2.0,
         )
-    # 若配置了 LLM_API_KEY，返回 LLMClient 实例
-    return LLMClient(
-        base_url=settings.llm_base_url, # 从 settings 读取 LLM base_url
-        api_key=settings.llm_api_key, # 从 settings 读取 LLM api_key
-        model=settings.llm_model, # 从 settings 读取 LLM model
-        timeout_s=settings.llm_timeout_s,
-    )
+        client.ping()
+        return "ok"
+    except Exception:
+        return "error"
+
+
+def _health_ping_database(url: str) -> None:
+    from app.memory.ltm_sql import ping_database
+
+    ping_database(url)
 
 
 #这个注解的作用是将 /health 路由注册到 FastAPI 应用实例中
 #get 方法用于定义一个 GET 请求，并返回一个 HealthResponse 对象。
 @router.get("/health")
 async def health() -> HealthResponse:   #->这个写法叫做类型注解，作用是指定函数返回值的类型
-    """健康检查：用于判断服务是否存活。"""
+    """健康检查：存活状态；若配置了 REDIS_URL / DATABASE_URL 则返回对应探活结果。"""
 
-    return HealthResponse()
+    redis_st = "skipped"
+    db_st = "skipped"
+    ru = (settings.redis_url or "").strip()
+    if ru:
+        redis_st = await asyncio.to_thread(_health_ping_redis, ru)
+    du = (settings.database_url or "").strip()
+    if du:
+        try:
+            await asyncio.wait_for(asyncio.to_thread(_health_ping_database, du), timeout=8.0)
+            db_st = "ok"
+        except Exception:
+            db_st = "error"
+    return HealthResponse(
+        redis=redis_st,
+        database=db_st,
+        ltm_extract_enabled=settings.ltm_extract_enabled,
+    )
+
+
+@router.get("/emotion/stats", response_model=EmotionStatsResponse)
+async def emotion_stats(
+    user_id: str | None = None,
+    window: EmotionWindow = Query(default=EmotionWindow.week),
+    max_lines: int = Query(default=4000, ge=200, le=20000),
+) -> EmotionStatsResponse:
+    """
+    从 `emotion_log` JSONL 聚合情绪统计（日/周视图）。
+
+    需开启 `EMOTION_LOG_ENABLED` 并有对话落盘才有数据；结果仅供产品观测，非医疗诊断。
+    """
+    uid = session_store.ensure_user_id(user_id)
+    path = (getattr(settings, "emotion_log_path", "") or "").strip() or "data/emotion_log.jsonl"
+    recs = load_emotion_jsonl(path, max_lines)
+    w = "week" if window == EmotionWindow.week else "day"
+    agg = compute_emotion_stats(recs, user_id=uid, window=w)
+    exists = Path(path).is_file()
+    hint = None
+    if agg["record_count"] == 0:
+        hint = "暂无数据：可在 .env 设置 EMOTION_LOG_ENABLED=true 并多轮对话后刷新。"
+
+    return EmotionStatsResponse(
+        user_id=uid,
+        emotion_log_enabled=bool(getattr(settings, "emotion_log_enabled", False)),
+        log_file=path,
+        log_file_exists=exists,
+        window=w,
+        record_count=agg["record_count"],
+        by_label=agg["by_label"],
+        by_risk_tier=agg["by_risk_tier"],
+        series=[EmotionSeriesPoint(**x) for x in agg["series"]],
+        hint=hint,
+    )
 
 
 # post 方法用于定义一个 POST 请求，并返回一个 SessionResetResponse 对象。
@@ -132,34 +247,104 @@ async def session_reset(req: SessionResetRequest) -> SessionResetResponse:
     return SessionResetResponse(ok=True, existed=existed)
 
 
+@router.get("/sessions", response_model=SessionListResponse)
+async def list_sessions(user_id: str | None = Query(default=None, description="用户标识；空则归一为 default")) -> SessionListResponse:
+    """
+    列出某用户在进程内存 STM 中的会话（含消息条数）。
+
+    说明：仅包含已产生过至少一条消息的会话；新建未发消息的会话由前端本地维护直至首轮 /chat。
+    """
+
+    uid = session_store.ensure_user_id(user_id)
+    rows = session_store.list_sessions_for_user(uid)
+    return SessionListResponse(
+        user_id=uid,
+        sessions=[SessionItemOut(session_id=sid, message_count=cnt) for sid, cnt in rows],
+    )
+
+
+@router.get("/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
+async def get_session_messages(
+    session_id: str,
+    user_id: str | None = Query(default=None, description="用户标识"),
+) -> SessionMessagesResponse:
+    """读取某会话 STM 中的消息（user/assistant），用于前端恢复聊天区。"""
+
+    uid = session_store.ensure_user_id(user_id)
+    sid = session_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id is required.")
+    msgs = session_store.get_messages(user_id=uid, session_id=sid)
+    if msgs is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return SessionMessagesResponse(
+        user_id=uid,
+        session_id=sid,
+        messages=[ChatMessageOut(role=m.role, content=m.content or "") for m in msgs],
+    )
+
+
+@router.delete("/sessions/{session_id}", response_model=SessionDeleteResponse)
+async def delete_session(
+    session_id: str,
+    user_id: str | None = Query(default=None, description="用户标识"),
+) -> SessionDeleteResponse:
+    """删除（清空）某会话的 STM，等价于 POST /sessions/reset。"""
+
+    uid = session_store.ensure_user_id(user_id)
+    sid = session_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id is required.")
+    existed = session_store.reset(user_id=uid, session_id=sid)
+    return SessionDeleteResponse(ok=True, existed=existed)
+
+
 @router.get("/trace/{trace_id}")
-async def get_trace(trace_id: str) -> TraceRecordOut:
+async def get_trace(
+    trace_id: str,
+    user_id: str | None = Query(default=None, description="调用方用户；传入时须与 trace 归属一致（V5 隔离）"),
+) -> TraceRecordOut:
     """
     查询单条 Trace。
 
     使用场景：
     - 你发起一次 /chat 后，拿到 trace_id
     - 再用该接口把“链路步骤 + 耗时 + decision/metrics”拿回来，方便演示可观测性
+
+    V5：可传 user_id 校验归属；strict_user_isolation=true 时必须传且须匹配。
     """
 
     rec = trace_store.get(trace_id)
     if rec is None:
         raise HTTPException(status_code=404, detail="Trace not found.")
+    assert_trace_access(rec, user_id)
     return _to_trace_out(rec)
 
 
 @router.get("/traces")
-async def list_traces(user_id: str | None = None, session_id: str | None = None, limit: int = 20) -> TraceListResponse:
+async def list_traces(
+    user_id: str | None = Query(default=None, description="用户标识；空则归一为 default（与 /chat 一致）"),
+    session_id: str | None = Query(
+        default=None,
+        description="必填：会话标识。省略或仅空白将返回 400（避免误用随机 UUID 得到空列表）。",
+    ),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> TraceListResponse:
     """
     列出某个会话下最近的 Trace（用于页面/调试面板）。
 
     约定：
     - user_id 为空时会归一为 default（与 /chat 的逻辑一致）
-    - session_id 必填；limit 默认 20
+    - session_id **必填且非空**；limit 默认 20
     """
 
+    if session_id is None or not session_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="session_id is required (non-empty query parameter).",
+        )
     uid = session_store.ensure_user_id(user_id)
-    sid = session_store.ensure_session_id(session_id)
+    sid = session_id.strip()
     items = [_to_trace_out(x) for x in trace_store.list_by_session(user_id=uid, session_id=sid, limit=limit)]
     return TraceListResponse(items=items)
 
@@ -197,20 +382,66 @@ async def post_memory_ltm(body: LTMWriteRequest) -> dict:
     return {"id": lid}
 
 
+@router.post("/memory/ltm/undo_extract", response_model=LTMUndoExtractResponse)
+async def post_memory_ltm_undo_extract(body: LTMUndoExtractRequest) -> LTMUndoExtractResponse:
+    """
+    撤销某次 /chat 中隐式抽取**新建**的 LTM（Trace 里 `ltm_extract_new_ids`）。
+    仅处理 source=dialogue_extract 且仍生效的条目；合并更新（update）产生的行不在此列表中。
+    """
+    tid = body.trace_id.strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="trace_id is required.")
+    rec = trace_store.get(tid)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Trace not found.")
+    assert_trace_access(rec, body.user_id)
+    ids = list(rec.decision.ltm_extract_new_ids)
+    owner = session_store.ensure_user_id(rec.request.user_id)
+    n = 0
+    for lid in ids:
+        it = ltm_store.get_by_id(lid)
+        if it is None or not it.is_active:
+            continue
+        if session_store.ensure_user_id(it.user_id) != owner:
+            continue
+        if (it.source or "").strip() != "dialogue_extract":
+            continue
+        try:
+            ltm_retriever.remove_item(it)
+        except Exception:
+            logger.warning("undo_extract remove_item failed id=%s", lid, exc_info=True)
+        if ltm_store.soft_delete(id=lid) is not None:
+            n += 1
+    return LTMUndoExtractResponse(trace_id=tid, deactivated=n)
+
+
 @router.get("/memory/ltm")
 async def get_memory_ltm(
     user_id: str | None = None,
     type: str | None = None,
     q: str | None = None,
-    limit: int = 10,
+    source: str | None = Query(default=None, description="来源精确匹配，如 dialogue_extract"),
+    limit: int = Query(default=10, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ) -> LTMListResponse:
     """
-    按 user_id 查询 LTM 列表，可选 type 过滤；占位实现不接向量检索。
+    按 user_id 查询 LTM 列表，可选 type / source 过滤、q 内容包含搜索、offset/limit 分页。
     """
     uid = session_store.ensure_user_id(user_id)
     if type is not None and type not in ("Preference", "Profile", "Event", "Constraint"):
         raise HTTPException(status_code=400, detail="type must be one of: Preference, Profile, Event, Constraint")
-    items = ltm_store.list_by_user(uid, type=type, limit=limit, q=q, only_active=True)
+    src_f = (source or "").strip()
+    if len(src_f) > 512:
+        raise HTTPException(status_code=400, detail="source filter too long (max 512).")
+    rows, total = ltm_store.list_by_user(
+        uid,
+        type=type,
+        limit=limit,
+        offset=offset,
+        q=q,
+        only_active=True,
+        source=src_f or None,
+    )
     return LTMListResponse(
         items=[
             LTMItemOut(
@@ -226,17 +457,24 @@ async def get_memory_ltm(
                 updated_at=x.updated_at,
                 embedding_status=x.embedding_status,
             )
-            for x in items
-        ]
+            for x in rows
+        ],
+        total=total,
+        offset=offset,
+        limit=limit,
     )
 
 
 @router.get("/memory/ltm/{id}")
-async def get_memory_ltm_by_id(id: str) -> LTMItemOut:
-    """按 id 查询一条 LTM（仅返回生效条目）。"""
+async def get_memory_ltm_by_id(
+    id: str,
+    user_id: str | None = Query(default=None, description="调用方用户；传入时须与记忆归属一致"),
+) -> LTMItemOut:
+    """按 id 查询一条 LTM（仅返回生效条目）。V5：可传 user_id 校验归属。"""
     x = ltm_store.get_by_id(id)
     if x is None or not x.is_active:
         raise HTTPException(status_code=404, detail="LTM item not found.")
+    assert_ltm_access(x, user_id)
     return LTMItemOut(
         id=x.id,
         user_id=x.user_id,
@@ -253,8 +491,12 @@ async def get_memory_ltm_by_id(id: str) -> LTMItemOut:
 
 
 @router.patch("/memory/ltm/{id}")
-async def patch_memory_ltm(id: str, body: LTMPatchRequest) -> LTMItemOut:
-    """局部更新一条长期记忆。"""
+async def patch_memory_ltm(
+    id: str,
+    body: LTMPatchRequest,
+    user_id: str | None = Query(default=None, description="调用方用户；传入时须与记忆归属一致"),
+) -> LTMItemOut:
+    """局部更新一条长期记忆。V5：可传 user_id 校验归属。"""
     if (
         body.content is None
         and body.tags is None
@@ -262,6 +504,10 @@ async def patch_memory_ltm(id: str, body: LTMPatchRequest) -> LTMItemOut:
         and body.is_active is None
     ):
         raise HTTPException(status_code=400, detail="No fields to update.")
+    existing = ltm_store.get_by_id(id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="LTM item not found.")
+    assert_ltm_access(existing, user_id)
     updated = ltm_store.update_item(
         id=id,
         content=body.content,
@@ -292,8 +538,15 @@ async def patch_memory_ltm(id: str, body: LTMPatchRequest) -> LTMItemOut:
 
 
 @router.delete("/memory/ltm/{id}")
-async def delete_memory_ltm(id: str) -> dict:
-    """软删除一条长期记忆。"""
+async def delete_memory_ltm(
+    id: str,
+    user_id: str | None = Query(default=None, description="调用方用户；传入时须与记忆归属一致"),
+) -> dict:
+    """软删除一条长期记忆。V5：可传 user_id 校验归属。"""
+    existing = ltm_store.get_by_id(id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="LTM item not found.")
+    assert_ltm_access(existing, user_id)
     deleted = ltm_store.soft_delete(id=id, updated_at=now_ms())
     if deleted is None:
         raise HTTPException(status_code=404, detail="LTM item not found.")
@@ -301,274 +554,473 @@ async def delete_memory_ltm(id: str) -> dict:
     return {"ok": True, "id": id}
 
 
-@router.post("/chat")
-# 这个方法的req是ChatRequest类的实例，session_store是InMemorySessionStore类的实例
-# 作用域：async def 表示这是一个异步方法，作用域是整个方法体
-# req 只作用于当前请求，不会影响其他请求，就是只影响当前方法的作用域
-async def chat(req: ChatRequest) -> ChatResponse:
+@router.get("/profile/{user_id}", response_model=ProfileSummary)
+async def get_profile(
+    user_id: str,
+    viewer_user_id: str | None = Query(
+        default=None,
+        description="查看者 user_id；传入或与 strict 模式下须与路径 user_id 一致",
+    ),
+) -> ProfileSummary:
     """
-    多轮对话入口（Day1/Day2 主入口）。
+    用户画像摘要（仅聚合该 user_id 的生效 LTM）。
 
-    核心流程：
-    1) 规范化 user_id/session_id
-    2) 从 session_store 取历史消息，并做 STM 裁剪（字符预算）
-    3) 拼接 system + history + 本轮 user 消息，调用 LLM
-    4) 将本轮 user/assistant 消息写回 session_store
-    5) 返回 reply/trace_id/user_id/session_id
+    V5：传 viewer_user_id 时须与路径 user_id 一致，防止越权查看他人画像。
     """
+    uid = session_store.ensure_user_id(user_id)
+    assert_profile_access(uid, viewer_user_id)
 
-    t0 = time.perf_counter()    # time是python内置的模块，用于处理时间，perf_counter()返回一个性能计数器的值，单位是秒
-    trace_id = str(uuid.uuid4())    # trace_id 是一个唯一标识符，用于跟踪请求的生命周期
-    user_id = session_store.ensure_user_id(req.user_id) # req的全拼是request
-    session_id = session_store.ensure_session_id(req.session_id)
+    all_items, total_mem = ltm_store.list_by_user(uid, limit=999_999, offset=0, only_active=True)
+    by_type: dict[str, int] = {}
+    for x in all_items:
+        by_type[x.type] = by_type.get(x.type, 0) + 1
 
-    # Day3: trace 记录的“步骤列表”。我们会把关键步骤的起止时间打点写进去。
-    steps: list[TraceStep] = []
-    request_ts = now_ms()
+    snippets: list[str] = []
+    for x in all_items[:5]:
+        c = (x.content or "").strip()
+        if len(c) > 80:
+            c = c[:80] + "…"
+        snippets.append(f"[{x.type}] {c}")
 
-    # Day4: 情绪识别（LLM 为主、关键词兜底）；风险分层仍用关键词。需先有 llm 再调用。
-    llm = _build_llm_client()
-    emotion_result = await analyze_emotion(req.message, llm=llm)
-    safety_mode = emotion_result.risk_tier == "高风险"
-    safety_trigger_reason = emotion_result.evidence if safety_mode else None
-    # Day5/V1: 状态机输出 mode + mode_reason + 工具占位（intended_tool / tool_params_placeholder）
-    mode, mode_reason, intended_tool, tool_params_placeholder = decide_mode(
-        req.message, str(emotion_result.label), emotion_result.intensity
+    return ProfileSummary(
+        user_id=uid,
+        total_memories=total_mem,
+        by_type=by_type,
+        recent_snippets=snippets,
     )
-    if safety_mode and getattr(settings, "safety_force_listen", True):
-        mode, mode_reason = "倾听", "高风险安全模式优先倾听"
-        intended_tool, tool_params_placeholder = None, None
-    elif emotion_result.risk_tier == "关注" and getattr(settings, "watch_tier_force_listen", True):
-        mode, mode_reason = "倾听", "关注档优先倾听"
-        intended_tool, tool_params_placeholder = None, None
-    system = SAFE_SYSTEM_PROMPT if safety_mode else get_system_prompt_for_mode(mode)
-    emotion_for_trace = {
-        "label": emotion_result.label,
-        "intensity": emotion_result.intensity,
-        "evidence": emotion_result.evidence,
-        "risk_tier": emotion_result.risk_tier,
+
+
+def _feedback_row_to_item(d: dict) -> FeedbackItemOut:
+    return FeedbackItemOut(
+        id=str(d.get("id", "")),
+        trace_id=str(d.get("trace_id", "")),
+        user_id=str(d.get("user_id", "")),
+        rating=str(d.get("rating", "")),
+        correction=d.get("correction"),
+        timestamp_ms=int(d.get("timestamp_ms", 0)),
+        session_id=d.get("session_id"),
+    )
+
+
+@router.post("/feedback", response_model=FeedbackResponse)
+async def post_feedback(req: FeedbackRequest) -> FeedbackResponse:
+    """
+    对某轮 /chat 提交反馈（点赞/点踩/纠错）。
+
+    - 须存在对应 trace_id，且 user_id 与 trace 归属一致（防伪造）。
+    - 点踩或填写 correction 时，可按配置额外写入 `feedback_for_eval.jsonl` 供离线评测。
+    """
+    if not getattr(settings, "feedback_enabled", True):
+        raise HTTPException(status_code=503, detail="Feedback is disabled.")
+
+    uid = session_store.ensure_user_id(req.user_id)
+    rec = trace_store.get(req.trace_id.strip())
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Trace not found.")
+    if rec.request.user_id != uid:
+        raise HTTPException(status_code=403, detail="trace_id does not belong to this user_id.")
+
+    corr = (req.correction or "").strip() or None
+    mirror = bool(
+        getattr(settings, "feedback_eval_mirror_enabled", True)
+        and (req.rating == "dislike" or bool(corr))
+    )
+    eval_path = (getattr(settings, "feedback_eval_log_path", "") or "").strip() or None
+
+    row = {
+        "trace_id": req.trace_id.strip(),
+        "user_id": uid,
+        "session_id": rec.request.session_id,
+        "rating": req.rating,
+        "correction": corr,
+        "timestamp_ms": now_ms(),
+        "trace_message_preview": (rec.request.message or "")[:300],
+        "trace_mode": rec.decision.mode,
+        "trace_risk_tier": (rec.decision.emotion or {}).get("risk_tier") if rec.decision.emotion else None,
     }
 
-    # V2 RAG：命中记忆与引用，默认无；检索成功时填充
-    memory_hits: list | None = None
-    citations: list | None = None
+    fid, mirrored = append_feedback_row(
+        row,
+        main_path=settings.feedback_log_path,
+        eval_path=eval_path,
+        mirror_to_eval=mirror,
+    )
+    return FeedbackResponse(ok=True, feedback_id=fid, mirrored_to_eval=mirrored)
 
-    # V1 情绪落盘占位：可选将本条情绪写入 JSONL，便于后续情绪曲线/回访
-    if getattr(settings, "emotion_log_enabled", False) and settings.emotion_log_path:
-        append_emotion_record(
-            settings.emotion_log_path,
+
+@router.get("/feedback/recent", response_model=FeedbackListResponse)
+async def list_feedback_recent(
+    limit: int = Query(default=30, ge=1, le=500),
+    user_id: str | None = Query(default=None, description="只看待定用户的反馈；不传则返回全局最近"),
+) -> FeedbackListResponse:
+    """最近反馈列表（从 JSONL 尾部读取，便于运营台/调试）。"""
+    if not getattr(settings, "feedback_enabled", True):
+        raise HTTPException(status_code=503, detail="Feedback is disabled.")
+
+    uid_filter = session_store.ensure_user_id(user_id) if user_id is not None and str(user_id).strip() else None
+    rows = read_feedback_tail(path=settings.feedback_log_path, limit=limit, user_id=uid_filter)
+    return FeedbackListResponse(items=[_feedback_row_to_item(x) for x in rows])
+
+
+@router.get("/feedback/export", response_model=FeedbackExportResponse)
+async def export_feedback_jsonl(
+    limit: int = Query(default=200, ge=1, le=5000),
+    user_id: str | None = Query(default=None, description="只导出该用户的反馈行"),
+) -> FeedbackExportResponse:
+    """导出最近 N 条反馈为 JSONL 文本，便于复制到评测流水线。"""
+    if not getattr(settings, "feedback_enabled", True):
+        raise HTTPException(status_code=503, detail="Feedback is disabled.")
+
+    uid_filter = session_store.ensure_user_id(user_id) if user_id is not None and str(user_id).strip() else None
+    rows = read_feedback_tail(path=settings.feedback_log_path, limit=limit, user_id=uid_filter)
+    lines = [json.dumps(r, ensure_ascii=False) for r in rows]
+    content = "\n".join(lines) + ("\n" if lines else "")
+    return FeedbackExportResponse(line_count=len(rows), content=content)
+
+
+def _require_admin_config_auth(request: Request) -> None:
+    """
+    轻量鉴权：配置了 ADMIN_CONFIG_TOKEN 则必须带 X-Admin-Token；
+    未配置时仅允许本机访问（避免公网误暴露）。
+    """
+    token = (getattr(settings, "admin_config_token", "") or "").strip()
+    if token:
+        if request.headers.get("X-Admin-Token") != token:
+            raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Token")
+        return
+    host = (request.client.host if request.client else "") or ""
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Admin config only from localhost, or set ADMIN_CONFIG_TOKEN and pass X-Admin-Token",
+    )
+
+
+@router.get("/admin/config", response_model=AdminHotConfigSnapshot)
+async def get_admin_hot_config(request: Request) -> AdminHotConfigSnapshot:
+    """获取当前运营热参数（白名单字段，与 data/hot_config.json 同步）。"""
+    _require_admin_config_auth(request)
+    return AdminHotConfigSnapshot(**snapshot_from_settings())
+
+
+@router.patch("/admin/config", response_model=AdminHotConfigSnapshot)
+async def patch_admin_hot_config(request: Request, body: AdminHotConfigPatch) -> AdminHotConfigSnapshot:
+    """部分更新热参数：写入 hot_config.json 并立即作用于进程内 settings（下一轮 /chat 生效）。"""
+    _require_admin_config_auth(request)
+    patch = body.model_dump(exclude_none=True)
+    if not patch:
+        return AdminHotConfigSnapshot(**snapshot_from_settings())
+    try:
+        merge_patch(patch)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except TypeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return AdminHotConfigSnapshot(**snapshot_from_settings())
+
+
+@router.get("/admin/quota")
+async def get_admin_quota_snapshot(
+    request: Request,
+    user_id: str | None = Query(default=None, description="查看该用户的当日配额占用"),
+) -> dict:
+    """运营台：配额占用与当前限额配置（与内存计数器一致）。"""
+    _require_admin_config_auth(request)
+    uid = session_store.ensure_user_id(user_id)
+    used = get_daily_usage(uid)
+    lim = int(getattr(settings, "quota_token_per_user_per_day", 0) or 0)
+    qps = float(getattr(settings, "quota_qps_per_user", 0) or 0)
+    qen = bool(getattr(settings, "quota_enabled", False))
+    return {
+        "user_id": uid,
+        "quota_enabled": qen,
+        "used_today": used,
+        "limit_per_day": lim,
+        "qps_per_user": qps,
+    }
+
+
+def _user_export_payload(uid: str) -> dict:
+    """合规导出：LTM（含已软删标记）+ STM 会话 + 反馈 JSONL 中该用户行 + 摘要。"""
+    items, _total = ltm_store.list_by_user(uid, limit=999_999, offset=0, only_active=False)
+    ltm_out = [x.model_dump() for x in items]
+    active_by_type: dict[str, int] = {}
+    n_active = 0
+    for x in items:
+        if x.is_active:
+            n_active += 1
+            active_by_type[x.type] = active_by_type.get(x.type, 0) + 1
+    sessions_meta = session_store.list_sessions_for_user(uid)
+    stm_out: list[dict] = []
+    for sid, _n in sessions_meta:
+        msgs = session_store.get_messages(user_id=uid, session_id=sid)
+        if msgs is None:
+            continue
+        stm_out.append(
             {
-                "user_id": user_id,
-                "session_id": session_id,
-                "timestamp_ms": request_ts,
-                "label": emotion_for_trace["label"],
-                "intensity": emotion_for_trace["intensity"],
-                "risk_tier": emotion_for_trace["risk_tier"],
-                "trace_id": trace_id,
+                "session_id": sid,
+                "message_count": len(msgs),
+                "messages": [{"role": m.role, "content": m.content} for m in msgs],
+            }
+        )
+    fb_path = (getattr(settings, "feedback_log_path", "") or "").strip()
+    feedback_rows = read_feedback_all_for_user(path=fb_path, user_id=uid) if fb_path else []
+    q_used = get_daily_usage(uid) if getattr(settings, "quota_enabled", False) else None
+    q_lim = int(getattr(settings, "quota_token_per_user_per_day", 0) or 0)
+    return {
+        "export_version": 1,
+        "exported_at_ms": now_ms(),
+        "user_id": uid,
+        "profile_summary": {
+            "active_ltm_count": n_active,
+            "total_ltm_rows": len(items),
+            "by_type_active": active_by_type,
+        },
+        "quota_snapshot": {
+            "used_today_chars_approx": q_used,
+            "limit_per_day": q_lim if q_lim > 0 else None,
+        },
+        "ltm": ltm_out,
+        "stm_sessions": stm_out,
+        "feedback": feedback_rows,
+        "note": "Trace 全文未打包；可按 trace_id 单独 GET /trace/{id} 拉取（若仍存）。",
+    }
+
+
+@router.get("/users/{user_id}/export")
+async def export_user_data_package(request: Request, user_id: str) -> JSONResponse:
+    """
+    运营合规：导出某用户的 LTM + STM + 反馈（JSON 附件）。
+    鉴权与 /admin/config 一致。
+    """
+    _require_admin_config_auth(request)
+    uid = session_store.ensure_user_id(user_id)
+    payload = _user_export_payload(uid)
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", uid).strip("_")[:80] or "user"
+    return JSONResponse(
+        content=payload,
+        headers={"Content-Disposition": f'attachment; filename="user-export-{safe}.json"'},
+    )
+
+
+@router.post("/users/{user_id}/forget", response_model=UserForgetResponse)
+async def user_forget_batch(request: Request, user_id: str, body: UserForgetRequest) -> UserForgetResponse:
+    """
+    运营合规：将该用户下**全部生效 LTM** 软删除并移出 RAG 索引；可选清空全部 STM。
+    须 `confirm=true`（不可逆，Trace/反馈 JSONL 不自动删）。
+    """
+    _require_admin_config_auth(request)
+    if not body.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "confirm_required",
+                "message": "请设置 confirm=true 以执行遗忘（LTM 软删 + 可选清空 STM）。",
             },
         )
+    uid = session_store.ensure_user_id(user_id)
+    ts = now_ms()
+    active_items, _ = ltm_store.list_by_user(uid, limit=999_999, offset=0, only_active=True)
+    n_ltm = 0
+    for it in active_items:
+        deleted = ltm_store.soft_delete(id=it.id, updated_at=ts)
+        if deleted:
+            ltm_retriever.remove_item(deleted)
+            n_ltm += 1
+    n_stm = session_store.clear_all_sessions_for_user(uid) if body.clear_stm else 0
+    return UserForgetResponse(ok=True, user_id=uid, ltm_deactivated=n_ltm, stm_sessions_cleared=n_stm)
 
-    def _mark_step(name: str, start_ms: int, end_ms: int, *, input_summary: str | None = None, output_summary: str | None = None, error: str | None = None) -> None:
-        # 这里做成内部函数：减少重复代码，也更容易给你看清楚“结构是什么、如何复用”
-        steps.append(
-            TraceStep(
-                name=name,
-                start_ms=start_ms,
-                end_ms=end_ms,
-                input_summary=input_summary,
-                output_summary=output_summary,
-                error=error,
-            )
-        )
 
-    # V2 RAG：可选检索 LTM 并注入 system；失败则降级（不中断主链路）
-    if getattr(settings, "rag_enabled", False):
-        s_rag = time.perf_counter()
-        try:
-            top_k = getattr(settings, "rag_top_k", 3)
-            min_score = getattr(settings, "rag_min_score", 0.0)
-            max_chars = getattr(settings, "rag_max_chars", 1200)
-            hits = ltm_retriever.retrieve(user_id=user_id, query=req.message, top_k=top_k, min_score=min_score)
-            e_rag = time.perf_counter()
-            evidence_blocks: list[str] = []
-            chars = 0
-            for h in hits:
-                block = f"[{h.item.type}] {h.item.content}"
-                if chars + len(block) > max_chars:
-                    break
-                evidence_blocks.append(block)
-                chars += len(block)
-            if evidence_blocks:
-                system = system + "\n\n【以下是与用户相关的长期记忆，请参考】\n" + "\n".join(evidence_blocks)
-            memory_hits = [{"id": h.item.id, "type": h.item.type, "score": round(h.score, 4)} for h in hits]
-            citations = memory_hits
-            _mark_step(
-                "retrieve_ltm",
-                start_ms=int((s_rag - t0) * 1000),
-                end_ms=int((e_rag - t0) * 1000),
-                input_summary=f"query_len={len(req.message)} top_k={top_k}",
-                output_summary=f"hits={len(hits)} ids={[x.item.id for x in hits]}",
-            )
-        except Exception as e:
-            _mark_step(
-                "retrieve_ltm",
-                start_ms=int((s_rag - t0) * 1000),
-                end_ms=int((time.perf_counter() - t0) * 1000),
-                input_summary=f"query_len={len(req.message)}",
-                error=str(e),
-            )
-
-    # system：安全模式用 SAFE_SYSTEM_PROMPT，否则用状态机 mode 对应的 prompt 模板（Day5）
-
-    # Short-term memory: previous turns within budget (system prompt handled separately)
-    # 中文版：短期记忆：预算内的前几轮（系统提示单独处理）
-    # 从 session_store 取历史消息，并做 STM 裁剪（字符预算）
-    # state 是一个 SessionState 类的实例，用于存储会话状态
-    # session_store 是一个 InMemorySessionStore 类的实例，用于存储会话状态
-    # history 是一个 ChatMessage 列表，用于存储会话历史消息
-    # messages 是一个 ChatMessage 列表，用于存储 LLM 调用的消息
-    # Step1: load_session + trim_stm
-    s1 = time.perf_counter()
-    state = session_store.get_or_create(user_id=user_id, session_id=session_id)
-    history = trim_messages_by_char_budget(state.messages, max_chars=settings.stm_max_chars)
-    messages = [ChatMessage(role="system", content=system), *history, ChatMessage(role="user", content=req.message)]
-    e1 = time.perf_counter()
-    _mark_step(
-        "load_session_and_trim_stm",
-        start_ms=int((s1 - t0) * 1000),
-        end_ms=int((e1 - t0) * 1000),
-        input_summary=f"history_before={len(state.messages)} max_chars={settings.stm_max_chars}",
-        output_summary=f"history_after={len(history)} messages_for_llm={len(messages)}",
-    )
-
-    # Step2: llm_call（复用上面为情绪识别已构建的 llm）
-    s2 = time.perf_counter()
+def _list_recent_risk_trace_rows(*, max_items: int, max_scan_lines: int) -> tuple[list[dict], str]:
+    """
+    从文件 trace 索引倒序扫描，返回命中安全标记的 trace 摘要。
+    返回 (items, storage_note)。
+    """
+    st = trace_store
+    if isinstance(st, InMemoryTraceStore):
+        return [], "memory_store"
+    if not isinstance(st, FileTraceStore):
+        return [], "unknown_store"
+    idx = st.index_file
+    if not idx.exists():
+        return [], "file_store"
     try:
-        resp = await llm.chat(messages) # 调用 LLM,await表示异步调用
-    except LLMClientError as e:
-        e2 = time.perf_counter()
-        _mark_step(
-            "llm_call",
-            start_ms=int((s2 - t0) * 1000),
-            end_ms=int((e2 - t0) * 1000),
-            input_summary=f"messages={len(messages)} model={settings.llm_model}",
-            error=str(e),
+        lines = idx.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return [], "file_store"
+    out: list[dict] = []
+    scanned = 0
+    for line in reversed(lines):
+        if len(out) >= max_items:
+            break
+        if scanned >= max_scan_lines:
+            break
+        scanned += 1
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        tid = row.get("trace_id") or ""
+        if not tid:
+            continue
+        rec = st.get(tid)
+        if rec is None:
+            continue
+        d = rec.decision
+        if not (d.safety_mode or d.safety_triggered):
+            continue
+        reason = d.safety_reason or d.safety_trigger_reason or ""
+        out.append(
+            {
+                "trace_id": rec.trace_id,
+                "user_id": rec.request.user_id,
+                "session_id": rec.request.session_id,
+                "timestamp_ms": rec.request.timestamp_ms,
+                "safety_mode": bool(d.safety_mode),
+                "safety_triggered": bool(d.safety_triggered),
+                "reason": reason[:200],
+                "message_preview": (rec.request.message or "")[:80],
+            }
         )
-        # 把失败 trace 也落盘（排障更友好）
-        latency_ms = int((time.perf_counter() - t0) * 1000)
-        trace_store.put(
-            TraceRecord(
-                trace_id=trace_id,
-                request=TraceRequest(user_id=user_id, session_id=session_id, message=req.message, timestamp_ms=request_ts),
-                steps=steps,
-                decision=TraceDecision(
-                    emotion=emotion_for_trace, mode=mode, mode_reason=mode_reason,
-                    safety_mode=safety_mode, safety_trigger_reason=safety_trigger_reason,
-                    intended_tool=intended_tool, tool_params_placeholder=tool_params_placeholder,
-                    memory_hits=memory_hits,
-                ),
-                metrics=TraceMetrics(latency_ms=latency_ms, token_in=None, token_out=None, model=settings.llm_model, degraded=True),
+    return out, "file_store"
+
+
+@router.get("/admin/risk_events")
+async def get_admin_risk_events(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=200),
+    scan_lines: int = Query(default=800, ge=10, le=10000, description="最多扫描索引行数（从新到旧）"),
+) -> dict:
+    """运营台：最近命中安全模式/内容安全的 trace 摘要（仅文件 Trace 存储有效）。"""
+    _require_admin_config_auth(request)
+    items, storage = _list_recent_risk_trace_rows(max_items=limit, max_scan_lines=scan_lines)
+    note = "ok"
+    if storage == "memory_store":
+        note = "当前为内存 Trace 存储（如 pytest），无全局风险列表；生产文件存储下可用。"
+    elif storage == "unknown_store":
+        note = "未知 Trace 存储实现，未扫描。"
+    return {"items": items, "storage": storage, "note": note, "count": len(items)}
+
+
+@router.post("/admin/eval/run", response_model=EvalRunResponse)
+async def admin_eval_run(
+    request: Request,
+    body: EvalRunRequest,
+    background_tasks: BackgroundTasks,
+) -> EvalRunResponse:
+    """
+    启动异步评测：逐条调用与 /chat 相同的生成链路。
+
+    需要运营鉴权（与 /admin/config 一致）。样本为 JSONL，每行 JSON 至少含 `message`。
+    """
+    _require_admin_config_auth(request)
+    uid = session_store.ensure_user_id(body.user_id)
+    if body.dataset == "builtin":
+        samples = load_builtin_samples(body.limit)
+        if not samples:
+            raise HTTPException(
+                status_code=400,
+                detail="Builtin eval set missing or empty (data/eval_builtin.jsonl).",
             )
-        )
-        raise HTTPException(status_code=502, detail=str(e)) from e  # 502表示服务器错误，502 Bad Gateway
-    e2 = time.perf_counter()
-    _mark_step(
-        "llm_call",
-        start_ms=int((s2 - t0) * 1000),
-        end_ms=int((e2 - t0) * 1000),
-        input_summary=f"messages={len(messages)} model={settings.llm_model}",
-        output_summary=f"llm_request_id={resp.get('request_id')}",
+    else:
+        raw = (body.jsonl or "").strip()
+        if not raw:
+            raise HTTPException(status_code=400, detail="jsonl is required when dataset=upload.")
+        try:
+            samples = parse_jsonl_lines(raw)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSONL: {e}") from e
+    samples = samples[: body.limit]
+    if not samples:
+        raise HTTPException(status_code=400, detail="No samples to run.")
+    job_id = create_job(samples)
+    background_tasks.add_task(run_eval_job, job_id, samples, uid)
+    return EvalRunResponse(job_id=job_id, total=len(samples))
+
+
+@router.get("/admin/eval/jobs/{job_id}", response_model=EvalJobStatusResponse)
+async def admin_eval_job_status(request: Request, job_id: str) -> EvalJobStatusResponse:
+    """查询评测任务进度与结果（完成后 results 含每条的 reply/trace 或错误）。"""
+    _require_admin_config_auth(request)
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return EvalJobStatusResponse(
+        job_id=job.job_id,
+        status=job.status,
+        progress=job.progress,
+        total=job.total,
+        results=list(job.results),
+        error=job.error,
+        summary=job.summary,
     )
 
-    reply = llm.extract_text(resp).strip()  # extract_text 从 LLM 响应中提取文本内容，strip() 去掉首尾空格
-    if not reply:
-        # 空响应也记录 trace（便于定位“模型成功返回，但结构异常/为空”的情况）
-        latency_ms = int((time.perf_counter() - t0) * 1000)
-        _mark_step("extract_text", start_ms=latency_ms, end_ms=latency_ms, error="empty_reply")
-        trace_store.put(
-            TraceRecord(
-                trace_id=trace_id,
-                request=TraceRequest(user_id=user_id, session_id=session_id, message=req.message, timestamp_ms=request_ts),
-                steps=steps,
-                decision=TraceDecision(
-                    emotion=emotion_for_trace, mode=mode, mode_reason=mode_reason,
-                    safety_mode=safety_mode, safety_trigger_reason=safety_trigger_reason,
-                    intended_tool=intended_tool, tool_params_placeholder=tool_params_placeholder,
-                    memory_hits=memory_hits,
-                ),
-                metrics=TraceMetrics(latency_ms=latency_ms, token_in=None, token_out=None, model=settings.llm_model, degraded=True),
-            )
-        )
-        raise HTTPException(status_code=502, detail="Empty model response.")
 
-    # Persist this turn into session memory
-    # 中文版：将此转换持久化为会话内存
-    # 作用：将本轮 user/assistant 消息写回 session_store，用于后续的 STM 裁剪
-    s3 = time.perf_counter()
-    session_store.append(user_id=user_id, session_id=session_id, message=ChatMessage(role="user", content=req.message))
-    session_store.append(user_id=user_id, session_id=session_id, message=ChatMessage(role="assistant", content=reply))
-    e3 = time.perf_counter()
-    _mark_step(
-        "persist_memory",
-        start_ms=int((s3 - t0) * 1000),
-        end_ms=int((e3 - t0) * 1000),
-        output_summary="appended user+assistant messages to session_store",
-    )
+@router.post("/chat")
+async def chat(req: ChatRequest) -> ChatResponse:
+    """多轮对话入口（JSON 一次性返回）。"""
+    prepared = await prepare_chat_until_llm(req)
+    return await run_llm_chat_and_finalize(prepared)
 
-    # latency_ms 是一个整数，用于表示 LLM 调用的延迟时间，单位是毫秒
-    # 计算规则：当前时间 - 开始时间 = 延迟时间，单位是秒，乘以 1000 = 毫秒
-    # perf_counter() 返回一个性能计数器的值，单位是秒，用于测量代码执行时间，记录的是此刻的时间
-    latency_ms = int((time.perf_counter() - t0) * 1000)
 
-    # Day3: 生成 trace record 并落盘
-    # token_in/token_out：这里先用“字符长度近似”做个占位（后续可替换成真实 token 计数）
-    token_in_est = sum(len(m.content or "") for m in messages)
-    token_out_est = len(reply)
-    trace_store.put(
-        TraceRecord(
-            trace_id=trace_id,
-            request=TraceRequest(user_id=user_id, session_id=session_id, message=req.message, timestamp_ms=request_ts),
-            steps=steps,
-            decision=TraceDecision(
-                emotion=emotion_for_trace,
-                mode=mode,
-                mode_reason=mode_reason,
-                safety_mode=safety_mode,
-                safety_trigger_reason=safety_trigger_reason,
-                intended_tool=intended_tool,
-                tool_params_placeholder=tool_params_placeholder,
-                memory_hits=memory_hits,
-            ),
-            metrics=TraceMetrics(
-                latency_ms=latency_ms,
-                token_in=token_in_est,
-                token_out=token_out_est,
-                model=settings.llm_model,
-                degraded=False,
-            ),
-        )
-    )
+@router.post("/chat/stream")
+async def chat_stream_endpoint(req: ChatRequest) -> StreamingResponse:
+    """
+    SSE：data 行为 JSON。
+    - meta: trace_id, user_id, session_id, quota_degraded
+    - delta: 增量文本字段 c
+    - done: 完整回复 + ChatResponse 字段
+    - error: detail / status
+    """
 
-    # V1 可观测：/chat 成功时打一条结构化日志（trace_id、latency、mode、risk_tier）
-    logger.info(
-        "chat_done trace_id=%s latency_ms=%s mode=%s risk_tier=%s user_id=%s",
-        trace_id, latency_ms, mode, emotion_for_trace.get("risk_tier"), user_id,
-    )
-
-    debug = None    # debug 是一个字典，用于返回额外的调试信息
-    # 作用：在开发环境下，返回额外的调试信息，用于排查问题
-    if settings.debug:
-        debug = {
-            "trace_id": trace_id,
-            "latency_ms": latency_ms,
-            "llm_request_id": resp.get("request_id"),
-            "model": settings.llm_model,
-            "user_id": user_id,
-            "session_id": session_id,
-            "history_messages": len(history),
+    async def event_gen():
+        prepared = await prepare_chat_until_llm(req)
+        head = {
+            "event": "meta",
+            "trace_id": prepared.trace_id,
+            "user_id": prepared.user_id,
+            "session_id": prepared.session_id,
+            "quota_degraded": prepared.quota_degraded_mode,
         }
+        yield f"data: {json.dumps(head, ensure_ascii=False)}\n\n"
+        s2 = time.perf_counter()
+        parts: list[str] = []
+        meta_out: dict[str, str | None] = {}
+        try:
+            async for delta in iter_chat_llm_text_deltas(prepared, meta_out):
+                parts.append(delta)
+                yield f"data: {json.dumps({'event': 'delta', 'c': delta}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'event': 'error', 'detail': llm_error_detail_for_client(e)}, ensure_ascii=False)}\n\n"
+            return
+        e2 = time.perf_counter()
+        full = "".join(parts)
+        try:
+            out = await finalize_chat_turn(
+                prepared,
+                reply=full,
+                llm_request_id=meta_out.get("request_id"),
+                llm_started_s=s2,
+                llm_ended_s=e2,
+                streamed=True,
+            )
+            body = {"event": "done", **out.model_dump()}
+            yield f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
+        except HTTPException as he:
+            payload = {"event": "error", "status": he.status_code, "detail": he.detail}
+            yield f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
 
-    # 返回 ChatResponse 类的实例，用于返回给客户端
-    # 作用：将 reply/trace_id/user_id/session_id/debug 封装成一个对象，方便客户端处理
-    return ChatResponse(reply=reply, trace_id=trace_id, user_id=user_id, session_id=session_id, debug=debug, citations=citations)
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 

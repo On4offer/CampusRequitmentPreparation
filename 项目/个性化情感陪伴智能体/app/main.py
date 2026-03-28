@@ -2,13 +2,18 @@ from __future__ import annotations  # 允许在函数注解中使用当前类名
 
 """FastAPI 应用入口（ASGI app）。"""
 
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI  # FastAPI 应用类
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 
 from app.api.routes import router as api_router    # API 路由
+from app.config.hot_config import load_hot_config_from_disk
 from app.core.settings import settings
 from app.policy import reload_policy_config
 
@@ -34,6 +39,8 @@ SWAGGER_CUSTOM_CSS = """
 """
 _HEAD_END = "</head>"
 
+_log = logging.getLogger(__name__)
+
 
 # 应用工厂函数
 def create_app() -> FastAPI:
@@ -46,13 +53,59 @@ def create_app() -> FastAPI:
     - /docs 使用自定义 Swagger UI（注入放大字体 CSS）
     """
 
-    app = FastAPI(title="Emotional Companion Agent", version="0.1.0", docs_url=None)
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):  # noqa: ARG001 — FastAPI lifespan 签名
+        worker_task: asyncio.Task | None = None
+        if getattr(settings, "ltm_extract_async", False) and (settings.redis_url or "").strip():
+            from app.memory.ltm_extract_async import ltm_extract_worker_loop
+
+            worker_task = asyncio.create_task(ltm_extract_worker_loop())
+            _log.info("ltm_extract_async: Redis worker started")
+        yield
+        if worker_task is not None:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except asyncio.CancelledError:
+                pass
+
+    app = FastAPI(title="Emotional Companion Agent", version="0.1.0", docs_url=None, lifespan=lifespan)
+
+    def _cors_allow_origins() -> list[str]:
+        raw = (settings.cors_origins or "").strip()
+        if raw:
+            return [o.strip() for o in raw.split(",") if o.strip()]
+        return [
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "http://127.0.0.1:4173",
+            "http://localhost:4173",
+        ]
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_allow_origins(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     app.include_router(api_router)
 
     # V1：启动时加载共情策略配置（POLICY_CONFIG_PATH 非空时从文件加载）
     _project_root = Path(__file__).resolve().parents[1]
     _config_path = (_project_root / settings.policy_config_path) if settings.policy_config_path else None
     reload_policy_config(_config_path)
+    load_hot_config_from_disk()
+
+    try:
+        from app.rag.warm_index import warm_ltm_retriever_from_store
+
+        warmed = warm_ltm_retriever_from_store()
+        if warmed:
+            _log.info("RAG：已从 LTM 预热内存索引，条数=%s", warmed)
+    except Exception as e:
+        _log.warning("RAG 预热跳过: %s", e)
 
     @app.get("/docs", include_in_schema=False)
     async def custom_swagger_ui_html():

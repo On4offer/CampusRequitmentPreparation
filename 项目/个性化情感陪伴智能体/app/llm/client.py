@@ -8,7 +8,9 @@ LLM 客户端封装层（OpenAI 兼容协议）。
 - 业务侧只关心 messages 输入与文本输出，尽量隔离供应商差异
 """
 
+import json
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -103,6 +105,64 @@ class LLMClient:
 
         data = resp.json()
         return {"request_id": request_id, "raw": data}
+
+    async def chat_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        temperature: float = 0.7,
+        meta_out: dict[str, str | None] | None = None,
+    ) -> AsyncIterator[str]:
+        """
+        OpenAI 兼容流式 ChatCompletions（SSE）。
+
+        仅 yield 非空文本增量。若传入 meta_out，会在收到流式 chunk 时写入 request_id（供应商返回的 id）。
+        """
+
+        fallback_id = str(uuid.uuid4())
+        url = f"{self._base_url}/v1/chat/completions"
+        payload = {
+            "model": self._model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "temperature": temperature,
+            "stream": True,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                    if resp.status_code >= 400:
+                        body = await resp.aread()
+                        raise LLMClientError(
+                            f"LLM http {resp.status_code} ({fallback_id}): {body[:1000]!r}"
+                        )
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        if line.startswith("data: "):
+                            raw = line[6:].strip()
+                            if raw == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(raw)
+                            except json.JSONDecodeError:
+                                continue
+                            if meta_out is not None and isinstance(chunk.get("id"), str):
+                                meta_out["request_id"] = chunk["id"]
+                            try:
+                                choice0 = (chunk.get("choices") or [{}])[0]
+                                delta = choice0.get("delta") or {}
+                                piece = delta.get("content") or ""
+                            except (IndexError, TypeError, AttributeError):
+                                piece = ""
+                            if piece:
+                                yield piece
+            except httpx.HTTPError as e:
+                raise LLMClientError(f"LLM stream failed ({fallback_id}): {e}") from e
 
     @staticmethod   # 静态方法，不依赖实例状态，可直接通过类名调用。
     def extract_text(chat_response: dict[str, Any]) -> str:

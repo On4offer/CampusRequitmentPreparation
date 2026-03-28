@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.api.routes as routes
 from app.main import create_app
+from tests.orchestrator_mocks import LC_MAIN_REPLY
 
 
 def _debug_enabled() -> bool:
@@ -27,19 +28,17 @@ def _dump_call(tag: str, call: list[dict[str, str]]) -> None:
 
 
 class _FakeLLM:
+    """仅情绪 / 隐式抽取等走 httpx LLMClient；主对话由 conftest mock 的 LangChain ChatModel 负责。"""
+
     def __init__(self) -> None:
         self.calls: list[list[dict[str, str]]] = []
 
     async def chat(self, messages, *, temperature: float = 0.7) -> dict[str, Any]:  # noqa: ANN001
-        # Keep this method async to match the real client interface.
         await asyncio.sleep(0)
-        # record messages for assertions
         self.calls.append([{"role": m.role, "content": m.content} for m in messages])
-        # Always respond with the most recent user content
-        last_user = next((m["content"] for m in reversed(self.calls[-1]) if m["role"] == "user"), "")
         return {
             "request_id": "fake",
-            "raw": {"choices": [{"message": {"content": f"echo:{last_user}"}}]},
+            "raw": {"choices": [{"message": {"content": "{}"}}]},
         }
 
     @staticmethod
@@ -50,10 +49,7 @@ class _FakeLLM:
 @pytest.fixture()
 def client_and_fake_llm(monkeypatch: pytest.MonkeyPatch):
     fake = _FakeLLM()
-
-    # Patch the route-level builder to avoid real network calls.
     monkeypatch.setattr(routes, "_build_llm_client", lambda: fake)
-
     app = create_app()
     with TestClient(app) as client:
         yield client, fake
@@ -64,27 +60,22 @@ def test_session_memory_appends_history(client_and_fake_llm):
 
     r1 = client.post("/chat", json={"user_id": "u1", "session_id": "s1", "message": "你好"})
     assert r1.status_code == 200
+    assert r1.json()["reply"] == LC_MAIN_REPLY.strip()
 
     r2 = client.post("/chat", json={"user_id": "u1", "session_id": "s1", "message": "你还记得我刚说了什么吗？"})
     assert r2.status_code == 200
+    assert r2.json()["reply"] == LC_MAIN_REPLY.strip()
 
-    # 每次 /chat 会先调情绪 LLM、再调对话 LLM，故 2 轮共 4 次调用
-    assert len(fake.calls) == 4
+    # 每轮仅情绪分析调用 httpx LLMClient
+    assert len(fake.calls) == 2
     _dump_call("emotion1", fake.calls[0])
-    _dump_call("chat1", fake.calls[1])
-    _dump_call("emotion2", fake.calls[2])
-    _dump_call("chat2", fake.calls[3])
+    _dump_call("emotion2", fake.calls[1])
 
-    # 第二轮对话的 LLM 调用应带上历史（前一轮 user + assistant）
-    second = fake.calls[3]
-    roles = [m["role"] for m in second]
-    assert roles[0] == "system"
-    # history user
-    assert any(m["role"] == "user" and m["content"] == "你好" for m in second)
-    # history assistant (echo of first user)
-    assert any(m["role"] == "assistant" and "echo:你好" in m["content"] for m in second)
-    # new user at end
-    assert second[-1]["role"] == "user"
+    msgs = client.get("/sessions/s1/messages", params={"user_id": "u1"}).json()["messages"]
+    roles = [m["role"] for m in msgs]
+    assert "user" in roles and "assistant" in roles
+    assert any(m["role"] == "user" and m["content"] == "你好" for m in msgs)
+    assert any(m["role"] == "assistant" and m["content"] == LC_MAIN_REPLY.strip() for m in msgs)
 
 
 def test_session_isolation(client_and_fake_llm):
@@ -94,20 +85,14 @@ def test_session_isolation(client_and_fake_llm):
     client.post("/chat", json={"user_id": "u1", "session_id": "s2", "message": "B"})
     client.post("/chat", json={"user_id": "u1", "session_id": "s1", "message": "C"})
 
-    # 每轮 /chat = 1 次情绪 + 1 次对话，共 3 轮 -> 6 次
-    assert len(fake.calls) == 6
-    _dump_call("s1-A emotion", fake.calls[0])
-    _dump_call("s1-A chat", fake.calls[1])
-    _dump_call("s2-B emotion", fake.calls[2])
-    _dump_call("s2-B chat", fake.calls[3])
-    _dump_call("s1-C emotion", fake.calls[4])
-    _dump_call("s1-C chat", fake.calls[5])
-    third = fake.calls[5]
+    assert len(fake.calls) == 3
 
-    # Third call is for s1; it should include history from s1 (A and echo:A), but not from s2 (B).
-    assert any(m["role"] == "user" and m["content"] == "A" for m in third)
-    assert any(m["role"] == "assistant" and "echo:A" in m["content"] for m in third)
-    assert not any(m["role"] == "user" and m["content"] == "B" for m in third)
+    third = fake.calls[2]
+    assert any(m["role"] == "user" and m["content"] == "C" for m in third)
+
+    s1_msgs = client.get("/sessions/s1/messages", params={"user_id": "u1"}).json()["messages"]
+    assert any(m["role"] == "user" and m["content"] == "A" for m in s1_msgs)
+    assert not any(m["role"] == "user" and m["content"] == "B" for m in s1_msgs)
 
 
 def test_session_reset_clears_history(client_and_fake_llm):
@@ -119,13 +104,9 @@ def test_session_reset_clears_history(client_and_fake_llm):
     assert rr.json()["existed"] is True
 
     client.post("/chat", json={"user_id": "u1", "session_id": "s1", "message": "after"})
-    # 2 轮 /chat -> 4 次调用；reset 后第二轮不应带 "hello" 历史
-    assert len(fake.calls) == 4
-    _dump_call("before-reset emotion", fake.calls[0])
-    _dump_call("before-reset chat", fake.calls[1])
-    _dump_call("after-reset emotion", fake.calls[2])
-    _dump_call("after-reset chat", fake.calls[3])
-    second = fake.calls[3]
-    # After reset, history should not include previous "hello"
+    assert len(fake.calls) == 2
+    second = fake.calls[1]
     assert not any(m["role"] == "user" and m["content"] == "hello" for m in second)
-
+    stm = client.get("/sessions/s1/messages", params={"user_id": "u1"}).json()["messages"]
+    assert not any(m["role"] == "user" and m["content"] == "hello" for m in stm)
+    assert any(m["role"] == "user" and m["content"] == "after" for m in stm)

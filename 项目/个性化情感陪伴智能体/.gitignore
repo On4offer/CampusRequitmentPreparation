@@ -3,9 +3,16 @@ __pycache__/
 *.py[cod]
 *.pyd
 *.pyo
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.hypothesis/
 .coverage
 coverage.xml
 htmlcov/
@@ -15,15 +22,19 @@ htmlcov/
 venv/
 ENV/
 
-# Env / secrets
+# Env / secrets（任意子目录下的同名文件；保留示例）
 .env
 .env.*
 !.env.example
+!web/.env.example
 
-# IDEs
+# IDEs / 编辑器
 .idea/
 .vscode/*
 !.vscode/launch.json
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
@@ -31,7 +42,20 @@ Thumbs.db
 
 # Logs / runtime artifacts
 *.log
+*.log.*
+
+# 本地数据与运行时（勿提交密钥、对话落盘、热配覆盖）
 data/trace/
 data/*.jsonl
 data/*.sqlite
+data/*.db
+data/hot_config.json
 
+# 可选：本地评测/反馈镜像（若不希望入库可取消下行注释）
+# data/feedback_for_eval.jsonl
+
+# Cursor / 本地 AI（按需）
+.cursor/
+
+# Node（若曾在仓库根执行过 npm）
+node_modules/

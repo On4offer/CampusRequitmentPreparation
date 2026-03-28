@@ -4,9 +4,16 @@ pydantic
 pydantic-settings
 httpx
 python-dotenv
+redis>=5.0.0
+sqlalchemy>=2.0.0
+pymysql>=1.1.0
 
 # UI (Day6)
 gradio
+
+# LangChain (orchestration subset; pin minor versions to avoid surprise API breaks)
+langchain-core>=0.3.29,<0.4
+langchain-openai>=0.2.14,<0.3
 
 # dev/test
 pytest

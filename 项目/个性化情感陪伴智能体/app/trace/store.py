@@ -56,7 +56,10 @@ class FileTraceStore:
         _safe_mkdir(self.index_file.parent)
 
         trace_path = self.trace_dir / f"{record.trace_id}.json"
-        trace_path.write_text(record.model_dump_json(ensure_ascii=False, indent=2), encoding="utf-8")
+        trace_path.write_text(
+            json.dumps(record.model_dump(mode="json"), ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
 
         # index 只存最小字段，避免文件过大
         index_row = {

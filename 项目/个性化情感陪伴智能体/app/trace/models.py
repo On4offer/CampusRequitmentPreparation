@@ -40,11 +40,30 @@ class TraceDecision(BaseModel):
     mode_reason: str | None = None
     safety_mode: bool | None = None
     safety_trigger_reason: str | None = None  # Day4：触发安全模式的原因（如命中关键词）
+    # V5：可审计总览（含输出脱敏等）；与 safety_trigger_reason 并存
+    safety_triggered: bool | None = None
+    safety_reason: str | None = None
     # V1 工具占位：mode=工具 时填写，便于 V3 真实接入
     intended_tool: str | None = None  # 如 weather / memo / time / unknown
     tool_params_placeholder: dict | None = None
+    # V3 工具执行：实际选中的工具、状态、错误
+    tool_selected: str | None = None  # 实际调用的工具 id
+    tool_status: str | None = None  # success | failed | skipped
+    tool_error: str | None = None  # 失败时的错误信息
     # V2 RAG：本轮命中的长期记忆 id/type/score
     memory_hits: list | None = None  # [{"id": str, "type": str, "score": float}, ...]
+    # V5 配额：日预算字符量（近似 token）、上限、是否超额拒绝
+    quota_used_today: int | None = None
+    quota_limit: int | None = None
+    quota_exceeded: bool | None = None
+    # 二期：日配额触顶后走「省流」成功完成本轮时为 True；纯 429 拒绝为 False/None
+    degraded_mode: bool | None = None
+    # V1.1：本轮对话隐式 LTM 写入条数（未开启或未触发为 0）
+    ltm_extract_written: int | None = None
+    # V1.1 P1：本轮因去重而合并更新的已有 LTM 条数
+    ltm_extract_updated: int | None = None
+    # V1.1 P1：本轮抽取**新建**的 LTM id（非 merge）；供 undo_extract 软删
+    ltm_extract_new_ids: list[str] = Field(default_factory=list)
 
 
 class TraceMetrics(BaseModel):

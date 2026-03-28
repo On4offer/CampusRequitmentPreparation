@@ -16,7 +16,7 @@ from collections import Counter
 _ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
-def _tokenize(text: str) -> list[str]:
+def tokenize(text: str) -> list[str]:
     """
     粗粒度分词：
     - 英文/数字：按连续 token 切分并小写
@@ -38,7 +38,7 @@ def embed_text(text: str) -> dict[str, float]:
     生成 L2 归一化稀疏向量。
     返回：{token: normalized_tf}
     """
-    tokens = _tokenize(text)
+    tokens = tokenize(text)
     if not tokens:
         return {}
 
